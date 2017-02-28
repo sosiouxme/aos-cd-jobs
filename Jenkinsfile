@@ -54,6 +54,7 @@ node('buildvm-devops') {
 				sh 'oct prepare docker --repo "rhel7next*"'
 				docker_rpm = sh script: 'rpm --query docker --queryformat %{SOURCERPM}', returnStdout: true
 				container_selinux_rpm = sh script: 'rpm --query container-selinux --queryformat %{SOURCERPM}', returnStdout: true
+				echo "Installed: ${docker_rpm} ${container_selinux_rpm}"
 			}
 			stage ('Prepare source repositories') {
 				sh 'oct prepare repositories'
