@@ -120,7 +120,7 @@ EOF
 				}
 				stage ('Send out an e-mail about new versions') {
 					mail (
-						to: ['aos-devel@redhat.com', 'skuznets@redhat.com'],
+						to: ['skuznets@redhat.com'],
 						subject: "${docker_rpm} and ${container_selinux_rpm} pushed to dockertested repository",
 						body: """The latest job[1] marked the following RPMs as successful:
 ${docker_rpm}
