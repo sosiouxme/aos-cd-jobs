@@ -1,5 +1,8 @@
 def latestVersion(rpm, repo) {
-    sh script: "sudo yum --disablerepo='*' --enablerepo='${repo}' --quiet list upgrades '${rpm}' | tail -n 1 | awk '{ print \$2 }'", returnStdout: true
+    sh(script: "sudo yum --disablerepo='*' --enablerepo='${repo}' --quiet list upgrades '${rpm}' | tail -n 1 | awk '{ print \$2 }'", returnStdout: true).trim()
+}
+def installedVersion(rpm) {
+    sh(script: "ssh -F ${ssh_config} openshiftdevel 'rpm --query ${rpm} --queryformat %{SOURCERPM}'", returnStdout: true).trim()
 }
 node('buildvm-devops') {
 	properties ([[
@@ -24,10 +27,10 @@ node('buildvm-devops') {
 	stage ('Check to see if we need to run') {
 	    next_docker = latestVersion('docker', 'rhel7next*')
 	    next_cselinux = latestVersion('container-selinux', 'rhel7next*')
-	    echo "rhel7next:\n docker-${next_docker} container-selinux-${next_cselinux}"
+	    echo "rhel7next: docker-${next_docker} container-selinux-${next_cselinux}"
 	    test_docker = latestVersion('docker', 'dockertested')
 	    test_cselinux = latestVersion('container-selinux', 'dockertested')
-	    echo "dockertested:\n docker-${test_docker} container-selinux-${test_cselinux}"
+	    echo "dockertested: docker-${test_docker} container-selinux-${test_cselinux}"
 	    if ( next_docker == test_docker && next_cselinux == test_cselinux ) {
 	        echo 'No new packages. Aborting build.'
 	        currentBuild.result = 'SUCCESS'
@@ -76,8 +79,8 @@ node('buildvm-devops') {
 			}
 			stage ('Install Docker') {
 				sh 'oct prepare docker --repo "rhel7next*"'
-				docker_rpm = sh script: 'rpm --query docker --queryformat %{SOURCERPM}', returnStdout: true
-				container_selinux_rpm = sh script: 'rpm --query container-selinux --queryformat %{SOURCERPM}', returnStdout: true
+				docker_rpm = installedVersion('docker')
+				container_selinux_rpm = installedVersion('container-selinux')
 				echo "Installed: ${docker_rpm} ${container_selinux_rpm}"
 			}
 			stage ('Prepare source repositories') {
