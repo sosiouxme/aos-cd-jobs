@@ -1,5 +1,5 @@
-def latest_version(package, repo) {
-    sh script: "yum --disablerepo='*' --enablerepo='${repo}' --quiet list upgrades '${package}' | tail -n 1 | awk '{ print $2 }'", returnStdout: true
+def latestVersion(package, repo) {
+    sh script: "yum --disablerepo='*' --enablerepo='${repo}' --quiet list upgrades '${package}' | tail -n 1 | awk '{ print \$2 }'", returnStdout: true
 }
 node('buildvm-devops') {
 	properties ([[
@@ -16,11 +16,11 @@ node('buildvm-devops') {
 	// https://issues.jenkins-ci.org/browse/JENKINS-33511
 	env.WORKSPACE = pwd()
 	stage ('Check to see if we need to run') {
-	    next_docker = latest_version('docker', 'rhel7next*')
-	    next_cselinux = latest_version('container-selinux', 'rhel7next*')
+	    next_docker = latestVersion('docker', 'rhel7next*')
+	    next_cselinux = latestVersion('container-selinux', 'rhel7next*')
 	    echo "rhel7next: ${test_docker} ${test_cselinux}"
-	    test_docker = latest_version('docker', 'dockertested')
-	    test_cselinux = latest_version('container-selinux', 'dockertested')
+	    test_docker = latestVersion('docker', 'dockertested')
+	    test_cselinux = latestVersion('container-selinux', 'dockertested')
 	    echo "dockertested: ${test_docker} ${test_cselinux}"
 	    if ( next_docker == test_docker && next_cselinux == test_cselinux ) {
 	        echo 'No new packages. Aborting build.'
