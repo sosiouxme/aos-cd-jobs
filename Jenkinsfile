@@ -1,8 +1,8 @@
 def latestVersion(rpm, repo) {
     sh(script: "sudo yum --disablerepo='*' --enablerepo='${repo}' --quiet list upgrades '${rpm}' | tail -n 1 | awk '{ print \$2 }'", returnStdout: true).trim()
 }
-def installedVersion(rpm) {
-    sh(script: "ssh -F ${ssh_config} openshiftdevel 'rpm --query ${rpm} --queryformat %{SOURCERPM}'", returnStdout: true).trim()
+def installedNVR(rpm) {
+    sh(script: "ssh -F ${ssh_config} openshiftdevel 'rpm --query ${rpm} --queryformat %{NAME}-%{VERSION}-%{RELEASE}'", returnStdout: true).trim()
 }
 node('buildvm-devops') {
 	properties ([[
@@ -79,8 +79,8 @@ node('buildvm-devops') {
 			}
 			stage ('Install Docker') {
 				sh 'oct prepare docker --repo "rhel7next*"'
-				docker_rpm = installedVersion('docker')
-				container_selinux_rpm = installedVersion('container-selinux')
+				docker_rpm = installedNVR('docker')
+				container_selinux_rpm = installedNVR('container-selinux')
 				echo "Installed: ${docker_rpm} ${container_selinux_rpm}"
 			}
 			stage ('Prepare source repositories') {
