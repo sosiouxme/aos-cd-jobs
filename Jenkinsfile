@@ -1,5 +1,5 @@
 def latestVersion(rpm, repo) {
-    sh script: "yum --disablerepo='*' --enablerepo='${repo}' --quiet list upgrades '${rpm}' | tail -n 1 | awk '{ print \$2 }'", returnStdout: true
+    sh script: "sudo yum --disablerepo='*' --enablerepo='${repo}' --quiet list upgrades '${rpm}' | tail -n 1 | awk '{ print \$2 }'", returnStdout: true
 }
 node('buildvm-devops') {
 	properties ([[
@@ -22,7 +22,7 @@ node('buildvm-devops') {
 	stage ('Check to see if we need to run') {
 	    next_docker = latestVersion('docker', 'rhel7next*')
 	    next_cselinux = latestVersion('container-selinux', 'rhel7next*')
-	    echo "rhel7next: ${test_docker} ${test_cselinux}"
+	    echo "rhel7next: ${next_docker} ${next_cselinux}"
 	    test_docker = latestVersion('docker', 'dockertested')
 	    test_cselinux = latestVersion('container-selinux', 'dockertested')
 	    echo "dockertested: ${test_docker} ${test_cselinux}"
