@@ -12,6 +12,22 @@ node('buildvm-devops') {
 	])
 	// https://issues.jenkins-ci.org/browse/JENKINS-33511
 	env.WORKSPACE = pwd()
+	stage ('Check to see if we need to run') {
+	    def latest_version(package, repo) {
+	        sh script: "yum --disablerepo='*' --enablerepo='${repo}' --quiet list upgrades '${package}' | tail -n 1 | awk '{ print $2 }'", returnStdout: true
+	    }
+	    next_docker = latest_version('docker', 'rhel7next*')
+	    next_cselinux = latest_version('container-selinux', 'rhel7next*')
+	    echo "rhel7next: ${test_docker} ${test_cselinux}"
+	    test_docker = latest_version('docker', 'dockertested')
+	    test_cselinux = latest_version('container-selinux', 'dockertested')
+	    echo "dockertested: ${test_docker} ${test_cselinux}"
+	    if ( next_docker == test_docker && next_cselinux == test_cselinux ) {
+	        echo 'No new packages. Aborting build.'
+	        currentBuild.result = 'SUCCESS'
+	        sh 'exit 0'
+	    }
+	}
 	venv_dir = "${env.WORKSPACE}/origin-ci-tool"
 	stage ('Create a virtualenv for the origin-ci-tool') {
 		if ( CLEAN_INSTALL.toBoolean() ) {
