@@ -16,6 +16,8 @@ node('buildvm-devops') {
 			$class: 'TimerTrigger',
 			spec: 'H H/3 * * *'
 		]]
+	],[
+		$class: 'DisableConcurrentBuildsJobProperty',
 	]])
 	// https://issues.jenkins-ci.org/browse/JENKINS-33511
 	env.WORKSPACE = pwd()
