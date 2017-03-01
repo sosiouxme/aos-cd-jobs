@@ -1,3 +1,6 @@
+def latest_version(package, repo) {
+    sh script: "yum --disablerepo='*' --enablerepo='${repo}' --quiet list upgrades '${package}' | tail -n 1 | awk '{ print $2 }'", returnStdout: true
+}
 node('buildvm-devops') {
 	properties ([[
 		$class: 'ParametersDefinitionProperty',
@@ -13,9 +16,6 @@ node('buildvm-devops') {
 	// https://issues.jenkins-ci.org/browse/JENKINS-33511
 	env.WORKSPACE = pwd()
 	stage ('Check to see if we need to run') {
-	    def latest_version(package, repo) {
-	        sh script: "yum --disablerepo='*' --enablerepo='${repo}' --quiet list upgrades '${package}' | tail -n 1 | awk '{ print $2 }'", returnStdout: true
-	    }
 	    next_docker = latest_version('docker', 'rhel7next*')
 	    next_cselinux = latest_version('container-selinux', 'rhel7next*')
 	    echo "rhel7next: ${test_docker} ${test_cselinux}"
