@@ -1,5 +1,5 @@
-def latestVersion(package, repo) {
-    sh script: "yum --disablerepo='*' --enablerepo='${repo}' --quiet list upgrades '${package}' | tail -n 1 | awk '{ print \$2 }'", returnStdout: true
+def latestVersion(rpm, repo) {
+    sh script: "yum --disablerepo='*' --enablerepo='${repo}' --quiet list upgrades '${rpm}' | tail -n 1 | awk '{ print \$2 }'", returnStdout: true
 }
 node('buildvm-devops') {
 	properties ([[
