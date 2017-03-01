@@ -22,10 +22,10 @@ node('buildvm-devops') {
 	stage ('Check to see if we need to run') {
 	    next_docker = latestVersion('docker', 'rhel7next*')
 	    next_cselinux = latestVersion('container-selinux', 'rhel7next*')
-	    echo "rhel7next: ${next_docker} ${next_cselinux}"
+	    echo "rhel7next:\n docker-${next_docker} container-selinux-${next_cselinux}"
 	    test_docker = latestVersion('docker', 'dockertested')
 	    test_cselinux = latestVersion('container-selinux', 'dockertested')
-	    echo "dockertested: ${test_docker} ${test_cselinux}"
+	    echo "dockertested:\n docker-${test_docker} container-selinux-${test_cselinux}"
 	    if ( next_docker == test_docker && next_cselinux == test_cselinux ) {
 	        echo 'No new packages. Aborting build.'
 	        currentBuild.result = 'SUCCESS'
