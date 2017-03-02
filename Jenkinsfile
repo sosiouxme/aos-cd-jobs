@@ -1,4 +1,5 @@
 def latestVersion(rpm, repo) {
+    sh "sudo yum --disablerepo='*' --enablerepo='${repo}' makecache"
     sh(script: "sudo yum --disablerepo='*' --enablerepo='${repo}' --quiet list upgrades '${rpm}' | tail -n 1 | awk '{ print \$2 }'", returnStdout: true).trim()
 }
 def installedNVR(rpm) {
