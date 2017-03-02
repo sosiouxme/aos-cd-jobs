@@ -35,8 +35,10 @@ node('buildvm-devops') {
 	    if ( next_docker == test_docker && next_cselinux == test_cselinux ) {
 	        echo 'No new packages. Aborting build.'
 	        currentBuild.result = 'SUCCESS'
-	        sh 'exit 0'
 	    }
+	}
+	if ( currentBuild.result == 'SUCCESS' ) {
+	    return
 	}
 	venv_dir = "${env.WORKSPACE}/origin-ci-tool"
 	stage ('Create a virtualenv for the origin-ci-tool') {
