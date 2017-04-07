@@ -132,7 +132,7 @@ ${container_selinux_rpm}
 
 These RPMs have been pushed to the dockertested[2] repository.
 
-[1] ${env.JOB_URL}
+[1] ${env.JOB_URL}${env.BUILD_NUMBER}
 [2] https://mirror.openshift.com/enterprise/rhel/dockertested/x86_64/os/"""
 					)
 				}
