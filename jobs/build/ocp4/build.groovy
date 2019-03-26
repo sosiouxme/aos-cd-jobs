@@ -33,6 +33,10 @@ rpmMirror = [       // where to mirror RPM compose
     composeDir: "", // e.g. "YYYY-MM-DD.1"
     url: "",
 ]
+
+// some state to record and preserve between stages
+finalRpmVersionRelease = ""  // 
+
 /**
  * Initialize properties from Jenkins parameters.
  * @return map which is the buildPlan property of this build.
@@ -103,6 +107,14 @@ def initialize() {
     return planBuilds()
 }
 
+def latestOpenshiftRpmBuild(stream) {
+    retry(3) {
+        commonlib.shell(
+            script: "brew latest-build --quiet rhaos-${stream}-rhel-7-candidate openshift | awk '{print \$1}'",
+            returnStdout: true,
+        ).trim()
+    }
+}
 
 // From a brew NVR of openshift, return just the V part.
 @NonCPS
@@ -121,13 +133,7 @@ def determineBuildVersion(stream) {
     def full = "${stream}.0"  // default
     def release = new Date().format("yyyyMMddHHmm")
 
-    def prevBuild = retry(3) {
-        commonlib.shell(
-            script: "brew latest-build --quiet rhaos-${stream}-rhel-7-candidate openshift | awk '{print \$1}'",
-            returnStdout: true,
-        ).trim()
-    }
-
+    def prevBuild = latestOpenshiftRpmBuild(stream)
     if(params.NEW_VERSION.trim() == "+") {
         // increment previous build version
         full = extractBuildVersion(prevBuild)
@@ -306,6 +312,10 @@ def stageBuildRpms() {
  * Set the new puddle directory (e.g. "YYYY-MM-DD.1")
  */
 def stageBuildCompose() {
+    // we may or may not have (successfully) built the openshift RPM in this run.
+    // in order to script the correct version to publish later, determine what's there now.
+    finalRpmVersionRelease = extractBuildVersion(latestOpenshiftRpmBuild(version.stream))
+
     if (!buildPlan.buildRpms && !buildPlan.forceBuild) {
         // a force build of just images is likely to want to pick up new dependencies,
         // so in that case still create the compose.
@@ -392,7 +402,7 @@ def stageBuildImages() {
 }
 
 def stageMirrorRpms() {
-    if (!buildPlan.buildRpms) {
+    if (!buildPlan.buildRpms && !buildPlan.forceBuild) {
         echo "No updated RPMs to mirror."
         return
     }
@@ -411,9 +421,9 @@ def stageMirrorRpms() {
 
     def binaryPkgName = "openshift"
     if(buildPlan.dryRun) {
-        echo("invoke_on_rcm_guest publish-oc-binary.sh ${rpmMirror.target} ${versionRelease} ${binaryPkgName}")
+        echo("invoke_on_rcm_guest publish-oc-binary.sh ${rpmMirror.target} ${finalRpmVersionRelease} ${binaryPkgName}")
     } else {
-        buildlib.invoke_on_rcm_guest("publish-oc-binary.sh", rpmMirror.target, versionRelease, binaryPkgName)
+        buildlib.invoke_on_rcm_guest("publish-oc-binary.sh", rpmMirror.target, finalRpmVersionRelease, binaryPkgName)
     }
 
     echo "Finished building OCP ${versionRelease}"
