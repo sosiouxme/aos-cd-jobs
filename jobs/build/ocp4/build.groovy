@@ -35,7 +35,7 @@ rpmMirror = [       // where to mirror RPM compose
 ]
 
 // some state to record and preserve between stages
-finalRpmVersionRelease = ""  // 
+finalRpmVersionRelease = ""  // set before building a compose
 
 /**
  * Initialize properties from Jenkins parameters.
@@ -314,7 +314,7 @@ def stageBuildRpms() {
 def stageBuildCompose() {
     // we may or may not have (successfully) built the openshift RPM in this run.
     // in order to script the correct version to publish later, determine what's there now.
-    finalRpmVersionRelease = extractBuildVersion(latestOpenshiftRpmBuild(version.stream))
+    finalRpmVersionRelease = latestOpenshiftRpmBuild(version.stream).replace("openshift-", "")
 
     if (!buildPlan.buildRpms && !buildPlan.forceBuild) {
         // a force build of just images is likely to want to pick up new dependencies,
