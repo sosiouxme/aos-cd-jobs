@@ -24,14 +24,6 @@ node {
                     ],
                     commonlib.suppressEmailParam(),
                     [
-                        name: 'MAIL_LIST_SUCCESS',
-                        description: 'Success Mailing List',
-                        $class: 'hudson.model.StringParameterDefinition',
-                        defaultValue: [
-                            'aos-team-art@redhat.com',
-                        ].join(',')
-                    ],
-                    [
                         name: 'MAIL_LIST_FAILURE',
                         description: 'Failure Mailing List',
                         $class: 'hudson.model.StringParameterDefinition',
@@ -74,7 +66,11 @@ node {
 
             stage("push to mirror") {
                 sh "rsync -avzh --delete -e \"ssh -o StrictHostKeyChecking=no\" ${LOCAL_SYNC_DIR} ${MIRROR_TARGET}:${MIRROR_PATH} "
-                buildlib.invoke_on_use_mirror("push.enterprise.sh")
+                pushStdout = buildlib.invoke_on_use_mirror("push.enterprise.sh")
+                // script does not return error code, so check output for failure condition
+                if (pushStdout.contains("[FAILURE]")) {
+                    error("Saw failures in push.enterprise.sh output:\n${pushStdout}")
+                }
             }
         }
     } catch (err) {
@@ -82,7 +78,8 @@ node {
             to: "${MAIL_LIST_FAILURE}",
             from: "aos-team-art@redhat.com",
             subject: "Error syncing v${SYNC_VERSION} repos",
-            body: """Encountered an error while running OCP pipeline: ${err}
+            body: """\
+Encountered an error while running OCP pipeline: ${err}
 
 Jenkins job: ${env.BUILD_URL}
         """);
