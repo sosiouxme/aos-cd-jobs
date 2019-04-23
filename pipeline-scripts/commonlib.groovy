@@ -44,6 +44,8 @@ ocpMajorDefaultVersion = [
     "all": ocp4DefaultVersion,
 ]
 
+defaultOcpBuildFork = "https://github.com/openshift/ocp-build-data"
+
 /**
  * Handles any common setup required by the library
  */
@@ -77,6 +79,21 @@ def ocpVersionParam(name='MINOR_VERSION', majorVersion='all') {
         $class: 'hudson.model.ChoiceParameterDefinition',
         choices: ocpMajorVersions[majorVersion].join('\n'),
         defaultValue: ocpMajorDefaultVersion[majorVersion],
+    ]
+}
+
+// parameter for groups; may eventually include arbitrary entries not just minor releases
+def ocpGroupParam(name='OCP_BUILD_GROUP', majorVersion='all') {
+    def choices = ocpMajorVersions[majorVersion]
+    for (i = 0; i < choices.size(); i++) {
+        choices[i] = "openshift-${choices[i]}"
+    }
+    return [
+        name: name,
+        description: 'OSE Version',
+        $class: 'hudson.model.ChoiceParameterDefinition',
+        choices: choices.join('\n'),
+        defaultValue: "openshift-${ocpMajorDefaultVersion[majorVersion]}",
     ]
 }
 
@@ -258,12 +275,12 @@ def array_to_list(array) {
     return l
 }
 
-def withTmpFile(Closure c) {
-    def tempFile = sh script: "mktemp", returnStdout: true
+def withTmpFile(tmpSpec="tmp-XXXXXXXXXX", Closure c) {
+    def tempFile = sh script: "mktemp ${tmpSpec}", returnStdout: true
     try {
         return c(tempFile)
     } finally {
-        sh "rm ${tempFile}"
+        echo "rm -f ${tempFile}"
     }
 }
 
