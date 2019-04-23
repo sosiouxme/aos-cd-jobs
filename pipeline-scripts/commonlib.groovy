@@ -258,4 +258,38 @@ def array_to_list(array) {
     return l
 }
 
+def withTmpFile(Closure c) {
+    def tempFile = sh script: "mktemp", returnStdout: true
+    try {
+        return c(tempFile)
+    } finally {
+        sh "rm ${tempFile}"
+    }
+}
+
+/**
+ * Retry the closure (with backoff) until it finishes or timeout is reached.
+ * @param limit (int) minutes to wait before timing out
+ * @c closure that is intended to succeed without exception
+ * So e.g.:
+ * commonlib.retryUntilTimeout(5) {
+ *     commonlib.shell("stuff that might fail")
+ * }
+ */
+def retryUntilTimeout(limit, Closure c) {
+    timeout(limit) { 
+        waitUntil {
+            try {
+                c()
+                return true
+            } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException e) {
+                throw e
+            } catch (e) {
+                echo "retryUntilTimeout encountered exception; retrying.\n${e}"
+                return false
+            }
+        }
+    }
+}
+
 return this
