@@ -33,6 +33,15 @@ node('openshift-build-1') {
     def buildlib = load( "pipeline-scripts/buildlib.groovy" )
     buildlib.initialize()
     def commonlib = buildlib.commonlib
+    commonlib.describeJob("buildvm-maint", """
+        -------------------------------------------
+        Ancient "maintenance" job for odds and ends
+        -------------------------------------------
+        Timing: The scheduled job of the same name runs this daily.
+
+        It's not clear anyone remembers what this actually does or whether we still need it.
+        If you figure it out, update this or get rid of the job as appropriate.
+    """)
 
     // doozer_working must be in WORKSPACE in order to have artifacts archived
     def doozer_working = "${WORKSPACE}/doozer_working"
