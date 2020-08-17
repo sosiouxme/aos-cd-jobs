@@ -1,60 +1,129 @@
-properties(
-  [
-    disableConcurrentBuilds()
-  ]
-)
+#!/usr/bin/env groovy
 
-// https://issues.jenkins-ci.org/browse/JENKINS-33511
-def set_workspace() {
-  if(env.WORKSPACE == null) {
-    env.WORKSPACE = WORKSPACE = pwd()
-  }
-}
+node {
+    checkout scm
+    def build = load("build.groovy")
+    def buildlib = build.buildlib
+    def commonlib = build.commonlib
+    commonlib.describeJob("signed-compose", """
+        -----------------------------------------------------
+        Create a signed compose of RPMs for OCP 3.11 releases
+        -----------------------------------------------------
+        Timing: Run before building images intended to release for 3.11. See:
+        https://github.com/openshift/art-docs/blob/master/3.11.z.md#build-signed-containers
 
-node('openshift-build-1') {
-  try {
-    timeout(time: 30, unit: 'MINUTES') {
-      deleteDir()
-      set_workspace()
-      dir('aos-cd-jobs') {
-        stage('clone') {
-          checkout scm
-          sh 'git checkout master'
-        }
-        stage('run') {
-          final url = sh(
-            returnStdout: true,
-            script: 'git config remote.origin.url')
-          if(!(url =~ /^[-\w]+@[-\w]+(\.[-\w]+)*:/)) {
-            error('This job uses ssh keys for auth, please use an ssh url')
-          }
-          def prune = true, key = 'openshift-bot'
-          if(url.trim() != 'git@github.com:openshift/aos-cd-jobs.git') {
-            prune = false
-            key = "${(url =~ /.*:([^\/]+)/)[0][1]}-aos-cd-bot"
-          }
-          sshagent([key]) {
-            sh """\
-virtualenv ../env/ -p python3
-. ../env/bin/activate
-pip install gitpython
-export GIT_PYTHON_TRACE=full
-${prune ? 'python -m aos_cd_jobs.pruner' : 'echo Fork, skipping pruner'}
-python -m aos_cd_jobs.updater
-"""
-          }
-        }
-      }
+        Because we do not build plashets for 3.11 yet, this job is used for
+        creating the signed compose that we build releasable images against. It
+        seems likely we could build plashets for 3.11, in which case this job
+        should be retired.
+    """)
+
+
+    properties(
+        [
+            disableResume(),
+            buildDiscarder(
+                logRotator(
+                    artifactDaysToKeepStr: '',
+                    artifactNumToKeepStr: '',
+                    daysToKeepStr: '',
+                    numToKeepStr: ''
+                )
+            ),
+            [
+                $class : 'ParametersDefinitionProperty',
+                parameterDefinitions: [
+                    commonlib.ocpVersionParam('BUILD_VERSION', '3'),
+                    booleanParam(
+                        name: 'ATTACH_BUILDS',
+                        description: 'Attach new package builds to rpm advisory',
+                        defaultValue: true
+                    ),
+                    booleanParam(
+                        name: 'KEEP_ADVISORY_STATE',
+                        description: 'Run a compose without changing the state of advisory',
+                        defaultValue: false
+                    ),
+                    booleanParam(
+                        name: 'DRY_RUN',
+                        description: 'Do not attach builds or update the puddle. Just show what would have happened',
+                        defaultValue: false
+                    ),
+                    commonlib.suppressEmailParam(),
+                    string(
+                        name: 'MAIL_LIST_SUCCESS',
+                        description: '(Optional) Success Mailing List',
+                        defaultValue: "aos-art-automation+new-signed-composes@redhat.com",
+                    ),
+                    string(
+                        name: 'MAIL_LIST_FAILURE',
+                        description: 'Failure Mailing List',
+                        defaultValue: 'aos-art-automation+failed-signed-puddle@redhat.com',
+                    ),
+                    commonlib.mockParam(),
+                ]
+            ],
+        ]
+    )
+
+    commonlib.checkMock()
+
+    def advisory = buildlib.elliott("--group=openshift-${params.BUILD_VERSION} get --use-default-advisory rpm --id-only", [capture: true]).trim()
+
+    stage("Initialize") {
+        buildlib.elliott "--version"
+        buildlib.kinit()
+        currentBuild.displayName = "#${currentBuild.number} OCP ${params.BUILD_VERSION}" +
+            (params.DRY_RUN ? " [DRY RUN]": "") +
+            (params.ATTACH_BUILDS ? "" : " [keep builds]")
+        build.initialize(advisory)
     }
-  } catch(err) {
-    mail(
-      to: 'tbielawa@redhat.com, jupierce@redhat.com',
-      from: "aos-cicd@redhat.com",
-      subject: 'aos-cd-jobs-branches job: error',
-      body: """\
-Encountered an error while running the aos-cd-jobs-branches job: ${err}\n\n
-Jenkins job: ${env.BUILD_URL}
-""")
-    throw err
-  }
+
+    try {
+        sshagent(["openshift-bot"]) {
+            lock("signed-compose-${params.BUILD_VERSION}") {
+                stage("Attach builds") { build.signedComposeAttachBuilds() }
+                stage("RPM diffs ran") { build.signedComposeRpmdiffsRan(advisory) }
+                stage("RPM diffs resolved") { build.signedComposeRpmdiffsResolved(advisory) }
+                stage("Advisory is QE") { build.signedComposeStateQE() }
+                stage("Signing completing") { build.signedComposeRpmsSigned() }
+                // Ensure the tag script can read the required cert
+                withEnv(['REQUESTS_CA_BUNDLE=/etc/pki/tls/certs/ca-bundle.crt']) {
+                    stage("New el7 compose") { build.signedComposeNewCompose("7") }
+                    if (build.requiresRhel8()) {
+                        stage("New el8 compose") { build.signedComposeNewCompose("8") }
+                    }
+                }
+            }
+        }
+        build.mailForSuccess()
+    } catch (err) {
+        currentBuild.description += "\n-----------------\n\n${err}\n-----------------\n"
+        currentBuild.result = "FAILURE"
+
+        if (params.MAIL_LIST_FAILURE.trim()) {
+            commonlib.email(
+                to: params.MAIL_LIST_FAILURE,
+                from: "aos-art-automation+failed-signed-compose@redhat.com",
+                replyTo: "aos-team-art@redhat.com",
+                subject: "Error building OCP Signed Puddle ${params.BUILD_VERSION}",
+                body:
+                    """\
+Pipeline build "${currentBuild.displayName}" encountered an error:
+${currentBuild.description}
+View the build artifacts and console output on Jenkins:
+    - Jenkins job: ${commonlib.buildURL()}
+    - Console output: ${commonlib.buildURL('console')}
+"""
+            )
+        }
+        throw err  // gets us a stack trace FWIW
+    } finally {
+        commonlib.safeArchiveArtifacts([
+                'email/*',
+                "${build.workdir}/changelog*.log",
+                "${build.workdir}/puddle*.log",
+            ]
+        )
+    }
 }
