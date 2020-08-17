@@ -1,60 +1,68 @@
-properties(
-  [
-    disableConcurrentBuilds()
-  ]
-)
+#!/usr/bin/env groovy
+node {
+    load('pipeline-scripts/commonlib.groovy').describeJob("helm_sync", """
+        ---------------------------------------
+        Sync contents of the helm RPM to mirror
+        ---------------------------------------
+        http://mirror.openshift.com/pub/openshift-v4/clients/helm/
 
-// https://issues.jenkins-ci.org/browse/JENKINS-33511
-def set_workspace() {
-  if(env.WORKSPACE == null) {
-    env.WORKSPACE = WORKSPACE = pwd()
-  }
+        Timing: This is only ever run by humans, upon request.
+    """)
 }
 
-node('openshift-build-1') {
-  try {
-    timeout(time: 30, unit: 'MINUTES') {
-      deleteDir()
-      set_workspace()
-      dir('aos-cd-jobs') {
-        stage('clone') {
-          checkout scm
-          sh 'git checkout master'
-        }
-        stage('run') {
-          final url = sh(
-            returnStdout: true,
-            script: 'git config remote.origin.url')
-          if(!(url =~ /^[-\w]+@[-\w]+(\.[-\w]+)*:/)) {
-            error('This job uses ssh keys for auth, please use an ssh url')
-          }
-          def prune = true, key = 'openshift-bot'
-          if(url.trim() != 'git@github.com:openshift/aos-cd-jobs.git') {
-            prune = false
-            key = "${(url =~ /.*:([^\/]+)/)[0][1]}-aos-cd-bot"
-          }
-          sshagent([key]) {
-            sh """\
-virtualenv ../env/ -p python3
-. ../env/bin/activate
-pip install gitpython
-export GIT_PYTHON_TRACE=full
-${prune ? 'python -m aos_cd_jobs.pruner' : 'echo Fork, skipping pruner'}
-python -m aos_cd_jobs.updater
-"""
-          }
-        }
-      }
+pipeline {
+    agent any
+    options { disableResume() }
+
+    parameters {
+        string(
+            name: "RPM_URL",
+            description: "Redistributable RPM URL. Example: http://download.eng.bos.redhat.com/brewroot/vol/rhel-7/packages/helm/3.0.1/4.el7/x86_64/helm-redistributable-3.0.1-4.el7.x86_64.rpm",
+            defaultValue: ""
+        )
+        string(
+            name: "VERSION",
+            description: "Desired version name. Example: v3.0.1",
+            defaultValue: ""
+        )
     }
-  } catch(err) {
-    mail(
-      to: 'tbielawa@redhat.com, jupierce@redhat.com',
-      from: "aos-cicd@redhat.com",
-      subject: 'aos-cd-jobs-branches job: error',
-      body: """\
-Encountered an error while running the aos-cd-jobs-branches job: ${err}\n\n
-Jenkins job: ${env.BUILD_URL}
-""")
-    throw err
-  }
+
+    stages {
+        stage("Validate params") {
+            steps {
+                script {
+                    if (!params.RPM_URL) {
+                        error "RPM_URL must be specified"
+                    }
+                    if (!params.VERSION) {
+                        error "VERSION must be specified"
+                    }
+                }
+            }
+        }
+        stage("Download RPM") {
+            steps {
+                sh "rm --force helm-redistributable.rpm"
+                sh "wget --no-verbose ${params.RPM_URL} --output-document=helm-redistributable.rpm"
+            }
+        }
+        stage("Extract RPM contents") {
+            steps {
+                sh "rpm2cpio helm-redistributable.rpm | cpio --extract --make-directories"
+                sh "rm --recursive --force ${params.VERSION} && mkdir ${params.VERSION}"
+                sh "mv --verbose ./usr/share/helm-redistributable/* ${params.VERSION}/"
+                sh "mv --verbose ${params.VERSION}/*/* ${params.VERSION}/ && /bin/ls --directory ${params.VERSION}/*/ | xargs rmdir"
+                sh "tree ${params.VERSION}"
+            }
+        }
+        stage("Sync to mirror") {
+            steps {
+                sshagent(['aos-cd-test']) {
+                    sh "scp -r ${params.VERSION} use-mirror-upload.ops.rhcloud.com:/srv/pub/openshift-v4/clients/helm/"
+                    sh "ssh use-mirror-upload.ops.rhcloud.com ln --symbolic --force --no-dereference ${params.VERSION} /srv/pub/openshift-v4/clients/helm/latest"
+                    sh "ssh use-mirror-upload.ops.rhcloud.com /usr/local/bin/push.pub.sh openshift-v4/clients/helm -v"
+                }
+            }
+        }
+    }
 }
