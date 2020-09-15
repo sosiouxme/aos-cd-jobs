@@ -1,60 +1,136 @@
-properties(
-  [
-    disableConcurrentBuilds()
-  ]
-)
+#!/usr/bin/env groovy
 
-// https://issues.jenkins-ci.org/browse/JENKINS-33511
-def set_workspace() {
-  if(env.WORKSPACE == null) {
-    env.WORKSPACE = WORKSPACE = pwd()
-  }
-}
+node {
+    checkout scm
+    def buildlib = load("pipeline-scripts/buildlib.groovy")
+    def commonlib = buildlib.commonlib
+    commonlib.describeJob("sweep", """
+        <h2>Sweep bugs</h2>
+        <b>Timing</b>: This runs after component builds (ocp3/ocp4/custom jobs),
+        or when preparing a nightly for examination by QE.
 
-node('openshift-build-1') {
-  try {
-    timeout(time: 30, unit: 'MINUTES') {
-      deleteDir()
-      set_workspace()
-      dir('aos-cd-jobs') {
-        stage('clone') {
-          checkout scm
-          sh 'git checkout master'
-        }
-        stage('run') {
-          final url = sh(
-            returnStdout: true,
-            script: 'git config remote.origin.url')
-          if(!(url =~ /^[-\w]+@[-\w]+(\.[-\w]+)*:/)) {
-            error('This job uses ssh keys for auth, please use an ssh url')
-          }
-          def prune = true, key = 'openshift-bot'
-          if(url.trim() != 'git@github.com:openshift/aos-cd-jobs.git') {
-            prune = false
-            key = "${(url =~ /.*:([^\/]+)/)[0][1]}-aos-cd-bot"
-          }
-          sshagent([key]) {
-            sh """\
-virtualenv ../env/ -p python3
-. ../env/bin/activate
-pip install gitpython
-export GIT_PYTHON_TRACE=full
-${prune ? 'python -m aos_cd_jobs.pruner' : 'echo Fork, skipping pruner'}
-python -m aos_cd_jobs.updater
-"""
-          }
-        }
-      }
+        After component builds, bugs are queried that are in MODIFIED state,
+        and are set to ON_QA. This is the signal to QE that they can test the bug.
+        In this mode of operation, ATTACH_BUGS is false.
+
+        When preparing a set of nightlies and advisories for QE, the sweep job will
+        look for all bugs that are in ON_QA or VERIFIED state, and attach them
+        to the default advisories, according to those recorded in ocp-build-data
+        group.yml.
+        For 3.11, all bugs are swept into the rpm advisory.
+        For 4.y, bugs are swept into the image or extras advisory.
+        CVEs are not currently swept by this job.
+
+        Optionally, builds from our brew candidate tags may also be swept. If necessary,
+        the advisory will be first set to NEW_FILES.
+    """)
+
+
+    properties(
+        [
+            disableResume(),
+            buildDiscarder(
+                logRotator(
+                    artifactDaysToKeepStr: '',
+                    artifactNumToKeepStr: '',
+                    daysToKeepStr: '',
+                    numToKeepStr: '90'
+                )
+            ),
+            [
+                $class : 'ParametersDefinitionProperty',
+                parameterDefinitions: [
+                    commonlib.ocpVersionParam('BUILD_VERSION'),
+                    booleanParam(
+                        name: 'SWEEP_BUILDS',
+                        defaultValue: true,
+                        description: 'Attach builds to default advisories',
+                    ),
+                    booleanParam(
+                        name: 'ATTACH_BUGS',
+                        defaultValue: false,
+                        description: [
+                          'If <b>on</b>: Attach ON_QA and VERIFIED bugs to their advisories',
+                          'If <b>off</b>: Set MODIFIED bugs to ON_QA. Do not change advisories',
+                        ].join('\n')
+                    ),
+                    commonlib.dryrunParam(),
+                    commonlib.mockParam(),
+                ],
+            ],
+        ]
+    )
+
+    commonlib.checkMock()
+
+    stage("Init") {
+        version = params.BUILD_VERSION
+        doozerOpts = "--group openshift-${version}"
+
+        echo "Initializing bug sweep for ${version}. Sync: #${currentBuild.number}"
+        currentBuild.displayName = "${version} bug sweep"
+
+        buildlib.elliott "--version"
+        sh "which elliott"
+
+        buildlib.kinit()
     }
-  } catch(err) {
-    mail(
-      to: 'tbielawa@redhat.com, jupierce@redhat.com',
-      from: "aos-cicd@redhat.com",
-      subject: 'aos-cd-jobs-branches job: error',
-      body: """\
-Encountered an error while running the aos-cd-jobs-branches job: ${err}\n\n
-Jenkins job: ${env.BUILD_URL}
-""")
-    throw err
-  }
+
+    // short circuit to UNSTABLE (not FAILURE) when automation is frozen
+    if (!buildlib.isBuildPermitted(doozerOpts)) {
+        currentBuild.result = 'UNSTABLE'
+        currentBuild.description = 'Builds not permitted'
+        echo('This build is being terminated because it is not permitted according to current group.yml')
+        return
+    }
+
+    stage("Sweep bugs") {
+        currentBuild.description = "Sweeping new bugs<br/>"
+
+        if (params.ATTACH_BUGS) {
+            currentBuild.description += "* Attaching ON_QA and VERIFIED bugs to default advisories<br/>"
+            cmd = [
+                "--group=openshift-${version}",
+                "find-bugs",
+                "--mode sweep",
+                "--status ON_QA",
+                "--status VERIFIED",
+                "--into-default-advisories",
+            ]
+        } else {
+            currentBuild.description += "* Changing MODIFIED bugs to ON_QA<br/>"
+            cmd = [
+                "--group=openshift-${version}",
+                "find-bugs",
+                "--mode qe",
+            ]
+        }
+
+        if (params.DRY_RUN) {
+            cmd << "--dry-run"
+        }
+
+        retry (3) {
+            try {
+                buildlib.elliott(cmd.join(' '))
+            } catch (Exception elliottErr) {
+                echo("Error attaching bugs to advisories (will retry a few times):\n${elliottErr}")
+                sleep(time: 1, unit: 'MINUTES')
+                throw elliottErr
+            }
+        }
+    }
+
+    stage("Sweep builds") {
+        if (!params.SWEEP_BUILDS) {
+            currentBuild.description += "* Not sweeping builds\n"
+            return
+        }
+        if (params.DRY_RUN) {
+            echo("Skipping attach builds to advisory for dry run")
+            return
+        }
+        buildlib.attachBuildsToAdvisory(["rpm", "image"], params.BUILD_VERSION)
+    }
+    currentBuild.description = "Ran without errors\n---------------\n" + currentBuild.description
 }
