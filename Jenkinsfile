@@ -1,60 +1,26 @@
-properties(
-  [
-    disableConcurrentBuilds()
-  ]
-)
+#!/usr/bin/env groovy
 
-// https://issues.jenkins-ci.org/browse/JENKINS-33511
-def set_workspace() {
-  if(env.WORKSPACE == null) {
-    env.WORKSPACE = WORKSPACE = pwd()
-  }
-}
+node {
+    checkout scm
+    def buildlib = load("pipeline-scripts/buildlib.groovy")
 
-node('openshift-build-1') {
-  try {
-    timeout(time: 30, unit: 'MINUTES') {
-      deleteDir()
-      set_workspace()
-      dir('aos-cd-jobs') {
-        stage('clone') {
-          checkout scm
-          sh 'git checkout master'
-        }
-        stage('run') {
-          final url = sh(
-            returnStdout: true,
-            script: 'git config remote.origin.url')
-          if(!(url =~ /^[-\w]+@[-\w]+(\.[-\w]+)*:/)) {
-            error('This job uses ssh keys for auth, please use an ssh url')
-          }
-          def prune = true, key = 'openshift-bot'
-          if(url.trim() != 'git@github.com:openshift/aos-cd-jobs.git') {
-            prune = false
-            key = "${(url =~ /.*:([^\/]+)/)[0][1]}-aos-cd-bot"
-          }
-          sshagent([key]) {
-            sh """\
-virtualenv ../env/ -p python3
-. ../env/bin/activate
-pip install gitpython
-export GIT_PYTHON_TRACE=full
-${prune ? 'python -m aos_cd_jobs.pruner' : 'echo Fork, skipping pruner'}
-python -m aos_cd_jobs.updater
-"""
-          }
-        }
-      }
+    echo buildlib.rhcosReleaseStreamUrl("4.6", "aarch64")
+    echo """${buildlib.orderedRhcosBuilds("4.6", "s390x")}"""
+    echo """${buildlib.orderedRhcosBuilds("4.2", "x86_64")}"""
+    try {
+        echo """${buildlib.orderedRhcosBuilds("4.2", "aarch64")}"""
+    } catch (exc) {
+        echo "that was expected to fail"
     }
-  } catch(err) {
-    mail(
-      to: 'tbielawa@redhat.com, jupierce@redhat.com',
-      from: "aos-cicd@redhat.com",
-      subject: 'aos-cd-jobs-branches job: error',
-      body: """\
-Encountered an error while running the aos-cd-jobs-branches job: ${err}\n\n
-Jenkins job: ${env.BUILD_URL}
-""")
-    throw err
-  }
+
+    echo """${buildlib.machineOsContentBuild("4.6", "ppc64le", true)}"""
+    try {
+        echo """${buildlib.machineOsContentBuild("4.6", "aarch64", false)}"""
+    } catch (exc) {
+        echo "that was expected to fail"
+    }
+
+    echo """${buildlib.latestRhcosPullspec("4.6", "s390x")}"""
+    echo """${buildlib.scanForRhcosChanges("4.3")}"""
+    echo """${buildlib.scanForRhcosChanges("4.2")}"""
 }
