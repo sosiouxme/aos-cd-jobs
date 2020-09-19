@@ -1549,10 +1549,12 @@ def buildBuildingPlashet(version, release, el_major, include_embargoed, auto_sig
 /* rhcosReleaseStreamUrl: base url for a release stream in the release browser
  * @param minorVersion  The 4.y ocp version as a string (e.g. "4.6")
  * @param arch  architecture we are interested in (e.g. "s390x")
+ * @param privacy  boolean, true for private, false for not
  * @return e.g. "https://releases-rhcos-art...com/storage/releases/rhcos-4.6-s390x"
  */
-def rhcosReleaseStreamUrl(minorVersion, arch) {
+def rhcosReleaseStreamUrl(minorVersion, arch, privacy=false) {
     def archSuffix = (arch == "x86_64") ? "" : "-${arch}"
+    // TODO: create private rhcos builds and do something with "privacy" here
     def base = "https://releases-rhcos-art.cloud.privileged.psi.redhat.com/storage/releases"
     return "${base}/rhcos-${minorVersion}${archSuffix}"
 }
@@ -1560,13 +1562,14 @@ def rhcosReleaseStreamUrl(minorVersion, arch) {
 /* orderedRhcosBuilds: rhcos build ids available in the release browser (AWS bucket)
  * @param minorVersion  The 4.y ocp version as a string (e.g. "4.6")
  * @param arch  architecture we are interested in (e.g. "s390x")
+ * @param privacy  boolean, true for private, false for not
  * @return build ids from newest to oldest for that version and arch
  */
-def orderedRhcosBuilds(minorVersion, arch) {
+def orderedRhcosBuilds(minorVersion, arch, privacy=false) {
     return commonlib.shell(
         script: """
             curl -sf --show-error --retry 3 --retry-delay 2 \
-            ${rhcosReleaseStreamUrl(minorVersion, arch)}/builds.json \
+            ${rhcosReleaseStreamUrl(minorVersion, arch, privacy)}/builds.json \
             | jq -r '.builds[] | (if type=="string" then . else .id end)'
         """,
         returnStdout: true,
@@ -1605,9 +1608,9 @@ def scanForRhcosChanges(minorVersion) {
     def changed = []
     def arches = branch_arches("openshift-${minorVersion}").toList()
     for (arch in arches) {
-        def builds = orderedRhcosBuilds(minorVersion, arch)
-        if (!builds) { continue }
         for (privacy in [true, false]) {
+            def builds = orderedRhcosBuilds(minorVersion, arch, privacy)
+            if (!builds) { continue }
             def seeking = "${minorVersion}-${arch}${privacy ? '-private' : ''}"
             try {
                 istag = machineOsContentBuild(minorVersion, arch, privacy)
@@ -1626,13 +1629,14 @@ def scanForRhcosChanges(minorVersion) {
 /* latestRhcosPullspec: get the machine-os-content pullspec for the latest rhcos build in a stream
  * @param minorVersion  The 4.y ocp version as a string (e.g. "4.6")
  * @param arch  architecture we are interested in (e.g. "s390x")
+ * @param privacy  boolean, true for private, false for not
  * @return null if there are none, or pullspec string e.g. "quay.io/...@sha256:1234abcd..."
  */
-def latestRhcosPullspec(minorVersion, arch) {
+def latestRhcosPullspec(minorVersion, arch, privacy=false) {
     def archSuffix = (arch == "x86_64") ? "" : "-${arch}"
-    def builds = orderedRhcosBuilds(minorVersion, arch)
+    def builds = orderedRhcosBuilds(minorVersion, arch, privacy)
     if (!builds) { return null }
-    def url = "${rhcosReleaseStreamUrl(minorVersion, arch)}/${builds[0]}"
+    def url = "${rhcosReleaseStreamUrl(minorVersion, arch, privacy)}/${builds[0]}"
     return commonlib.shell(
         // before 4.3 the arch was not included in the path; try both ways
         script: """
