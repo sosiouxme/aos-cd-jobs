@@ -1546,4 +1546,103 @@ def buildBuildingPlashet(version, release, el_major, include_embargoed, auto_sig
     return r
 }
 
+/* rhcosReleaseStreamUrl: base url for a release stream in the release browser
+ * @param minorVersion  The 4.y ocp version as a string (e.g. "4.6")
+ * @param arch  architecture we are interested in (e.g. "s390x")
+ * @return e.g. "https://releases-rhcos-art...com/storage/releases/rhcos-4.6-s390x"
+ */
+def rhcosReleaseStreamUrl(minorVersion, arch) {
+    def archSuffix = (arch == "x86_64") ? "" : "-${arch}"
+    def base = "https://releases-rhcos-art.cloud.privileged.psi.redhat.com/storage/releases"
+    return "${base}/rhcos-${minorVersion}${archSuffix}"
+}
+
+/* orderedRhcosBuilds: rhcos build ids available in the release browser (AWS bucket)
+ * @param minorVersion  The 4.y ocp version as a string (e.g. "4.6")
+ * @param arch  architecture we are interested in (e.g. "s390x")
+ * @return build ids from newest to oldest for that version and arch
+ */
+def orderedRhcosBuilds(minorVersion, arch) {
+    return commonlib.shell(
+        script: """
+            curl -sf --show-error --retry 3 --retry-delay 2 \
+            ${rhcosReleaseStreamUrl(minorVersion, arch)}/builds.json \
+            | jq -r '.builds[] | (if type=="string" then . else .id end)'
+        """,
+        returnStdout: true,
+    ).split("\n")
+}
+
+/* machineOsContentBuild: id of machine-os-content build tagged in the relevant imagestream
+ * @param minorVersion  The 4.y ocp version as a string (e.g. "4.6")
+ * @param arch  architecture we are interested in (e.g. "s390x")
+ * @param privacy  boolean, true for private, false for not
+ * @return string build for m-os-c tagged into the imagestream for that version and arch
+ */
+def machineOsContentBuild(minorVersion, arch, privacy) {
+    def archSuffix = (arch == "x86_64") ? "" : "-${arch}"
+    def privacySuffix = privacy ? "-priv" : ""
+    def namespace = "ocp${archSuffix}${privacySuffix}"
+    def is = "${minorVersion}-art-latest${archSuffix}${privacySuffix}"
+
+    retry(3) {
+        return oc(
+            """--kubeconfig ${ciKubeconfig}
+               get istag ${is}:machine-os-content -n ${namespace}
+               --template '{{.image.dockerImageMetadata.Config.Labels.version}}'
+            """,
+            [capture: true]
+        )
+    }
+}
+
+/* scanForRhcosChanges: check if there are any more recent builds of rhcos in
+ * the build bucket than in the release image streams
+ * @param minorVersion  The 4.y ocp version as a string (e.g. "4.6")
+ * @return list describing any updates available
+ */
+def scanForRhcosChanges(minorVersion) {
+    def changed = []
+    def arches = branch_arches("openshift-${minorVersion}").toList()
+    for (arch in arches) {
+        def builds = orderedRhcosBuilds(minorVersion, arch)
+        if (!builds) { continue }
+        for (privacy in [true, false]) {
+            def seeking = "${minorVersion}-${arch}${privacy ? '-private' : ''}"
+            try {
+                istag = machineOsContentBuild(minorVersion, arch, privacy)
+            } catch (ex) {
+                echo "Couldn't retrieve current ${seeking}; assuming it doesn't exist"
+                istag = "missing"
+            }
+            if (istag != builds[0]) {
+                changed.add("${seeking}: current ${istag} updated by ${builds[0]}")
+            }
+        }
+    }
+    return changed
+}
+
+/* latestRhcosPullspec: get the machine-os-content pullspec for the latest rhcos build in a stream
+ * @param minorVersion  The 4.y ocp version as a string (e.g. "4.6")
+ * @param arch  architecture we are interested in (e.g. "s390x")
+ * @return null if there are none, or pullspec string e.g. "quay.io/...@sha256:1234abcd..."
+ */
+def latestRhcosPullspec(minorVersion, arch) {
+    def archSuffix = (arch == "x86_64") ? "" : "-${arch}"
+    def builds = orderedRhcosBuilds(minorVersion, arch)
+    if (!builds) { return null }
+    def url = "${rhcosReleaseStreamUrl(minorVersion, arch)}/${builds[0]}"
+    return commonlib.shell(
+        // before 4.3 the arch was not included in the path; try both ways
+        script: """
+           (
+              curl -sf --show-error --retry 3 --retry-delay 2 ${url}/${arch}/meta.json \
+           || curl -sf --show-error --retry 3 --retry-delay 1 ${url}/meta.json \
+           ) | jq -r '.oscontainer | (.image + "@" + .digest)'
+        """,
+        returnStdout: true,
+    )
+}
+
 return this

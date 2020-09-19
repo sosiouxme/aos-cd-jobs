@@ -103,6 +103,19 @@ node {
 
                             buildlib.cleanWorkdir(doozer_working, true)
 
+                            def changedRhcos = null
+                            try {
+                                changedRhcos = buildlib.scanForRhcosChanges(version)
+                            } catch (ex) {
+                                echo "Problem detecting updated RHCOS: ${ex}"
+                                // don't let this block the rest of the scan though
+                                currentBuild.result = "UNSTABLE"
+                                currentBuild.description += """<p style="color:#d00">failed to scan RHCOS for ${version}</p>"""
+                            }
+                            if (changedRhcos) {
+                                echo "Detected updated RHCOS: ${changedRhcos}"
+                            }
+
                             def yamlStr = buildlib.doozer(
                                 """
                                 --working-dir ${doozer_working}
@@ -131,6 +144,16 @@ node {
                                     ]
                                 )
                                 currentBuild.description += "<br>triggered build: ${version}"
+                            } else if (changedRhcos) {
+                                build(
+                                    job: 'build%2Fbuild-sync',
+                                    propagate: false,
+                                    wait: false,
+                                    parameters: [
+                                        string(name: 'BUILD_VERSION', value: version),
+                                    ]
+                                )
+                                currentBuild.description += "<br>triggered build-sync: ${version}"
                             }
                         }
                     } catch (err) {
