@@ -1,60 +1,50 @@
-properties(
-  [
-    disableConcurrentBuilds()
-  ]
-)
+#!/usr/bin/env groovy
 
-// https://issues.jenkins-ci.org/browse/JENKINS-33511
-def set_workspace() {
-  if(env.WORKSPACE == null) {
-    env.WORKSPACE = WORKSPACE = pwd()
-  }
-}
+node {
+    checkout scm
+    buildlib = load( "pipeline-scripts/buildlib.groovy" )
+    commonlib = buildlib.commonlib
+    commonlib.describeJob("publish-rpms", """
+        <h2>Automatically publishing rpms to mirror</h2>
+    """)
 
-node('openshift-build-1') {
-  try {
-    timeout(time: 30, unit: 'MINUTES') {
-      deleteDir()
-      set_workspace()
-      dir('aos-cd-jobs') {
-        stage('clone') {
-          checkout scm
-          sh 'git checkout master'
-        }
-        stage('run') {
-          final url = sh(
-            returnStdout: true,
-            script: 'git config remote.origin.url')
-          if(!(url =~ /^[-\w]+@[-\w]+(\.[-\w]+)*:/)) {
-            error('This job uses ssh keys for auth, please use an ssh url')
-          }
-          def prune = true, key = 'openshift-bot'
-          if(url.trim() != 'git@github.com:openshift/aos-cd-jobs.git') {
-            prune = false
-            key = "${(url =~ /.*:([^\/]+)/)[0][1]}-aos-cd-bot"
-          }
-          sshagent([key]) {
-            sh """\
-virtualenv ../env/ -p python3
-. ../env/bin/activate
-pip install gitpython
-export GIT_PYTHON_TRACE=full
-${prune ? 'python -m aos_cd_jobs.pruner' : 'echo Fork, skipping pruner'}
-python -m aos_cd_jobs.updater
-"""
-          }
-        }
-      }
-    }
-  } catch(err) {
-    mail(
-      to: 'jupierce@redhat.com',
-      from: "aos-cicd@redhat.com",
-      subject: 'aos-cd-jobs-branches job: error',
-      body: """\
-Encountered an error while running the aos-cd-jobs-branches job: ${err}\n\n
-Jenkins job: ${env.BUILD_URL}
-""")
-    throw err
-  }
+    properties(
+        [
+            disableResume(),
+            buildDiscarder(
+                logRotator(
+                    artifactDaysToKeepStr: '',
+                    artifactNumToKeepStr: '',
+                    daysToKeepStr: '',
+                    numToKeepStr: ''
+                )
+            ),
+            [
+                $class : 'ParametersDefinitionProperty',
+                parameterDefinitions: [
+                    string(
+                        name: 'BUILD_VERSION',
+                        description: 'Target release version',
+                        trim: true,
+                    ),
+                    commonlib.mockParam(),
+                ]
+            ],
+            disableConcurrentBuilds()
+        ]
+    )
+    commonlib.checkMock()
+
+    version = params.BUILD_VERSION
+    path = "openshift-v4/dependencies/rpms/${version}-beta"
+    mirror_dir = "/srv/pub/${path}"
+    commonlib.shell(
+        script: """
+            set -e
+            ./collect-deps.sh ${version}
+            rsync --recursive --delete ${version}-beta/ use-mirror-upload:${mirror_dir}
+            ssh use-mirror-upload 'createrepo --database ${mirror_dir} && /usr/local/bin/push.pub.sh ${path} -v'
+            rm -r ${version}-beta
+        """
+    )
 }
