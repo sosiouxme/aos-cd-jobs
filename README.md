@@ -1,233 +1,147 @@
-# aos-cd-jobs
+# Manage OLM operator manifests in appregistry format
 
-This repository backs Jenkins jobs on a couple of Jenkins masters.
+## Purpose
 
-## Jenkins pipeline definitions under `scheduled-jobs/`
+This job builds and publishes operator manifest images from OLM operators.
 
-Scheduled pipeline definitions are stored in this directory so they are not
-indexed by the process described below and turned into a branch on the
-multi-branch pipeline.  This is done to facilitate enabling and disabling the
-jobs without needing to change the source code on the repository, and any job
-that requires that should be under this directory.
+This will likely only make sense once you are familiar with
+[What ART needs to know about OLM operators and CSVs](https://mojo.redhat.com/docs/DOC-1203429)
+The way that multiple releases are intermingled is truly convoluted, see especially
+[The current process](https://mojo.redhat.com/docs/DOC-1203429#jive_content_id_The_current_process).
 
-|     Job Name     | Description |
-| ---------------- | ----------- |
-| `build/ose`      | Runs build/ose daily. Presently used to build 3.6 for daily integration test environments. |
-| `build/t-th`     | Runs build/ose every Tuesday and Thursday for particular builds of OCP. |
+Operator manifests (which include the CSV that OLM uses to manage the operator) are extracted
+from the operator images and built into operator-metadata images. Then they are published:
 
-## Jenkins pipeline definitions under `jobs/`
+* dev: the metadata image NVR is submitted to OMPS which retrieves and publishes it in redhat-operators-art
+* stage, prod: the metadata image is attached to an advisory where it can be pushed to stage/prod
 
-An internal [Continuous Infrastructure Jenkins instance](https://buildvm.openshift.eng.bos.redhat.com:8443/) indexes
-Jenkinsfiles in the branches of this repository.  The branches are automatically generated from the Jenkinsfiles that live under
-the `jobs/` directory on the `master` branch. The job responsible for generating, updating and removing the branches can be found
-in the [`Jenkinsfile`](Jenkinsfile) at the root directory. The branch update job is configured to be executed periodically, but
-can be manually triggered in [jenkins](https://buildvm.openshift.eng.bos.redhat.com:8443/job/update-branches/).
+## Timing
 
-The scripts used by the job described above are [`pruner.py`](aos_cd_jobs/pruner.py), which removes branches for jobs that no
-longer exist, and [`updater.py`](aos_cd_jobs/updater.py), which creates/updates branches for existing jobs. A "job" is any
-directory under the `jobs/` directory which contains a `Jenkinsfile`.  Every branch is an orphan (doesn't contain any history) and
-its contents are the contents of the `master` branch with the corresponding directory under `jobs/` copied to the root directory
-and the `jobs/` directory removed.
+* dev: ocp4 and custom jobs run this automatically to publish manifests for any new OLM operator builds they may have created.
+* stage: [release-artists do a stage run to hand off new images for QE to verify in a release.](https://github.com/openshift/art-docs/blob/master/4.y.z-stream.md#create-stage-operator-metadata-containers)
+* prod: [release-artists do a prod run for a verified release when we are CERTAIN it will ship next.](https://github.com/openshift/art-docs/blob/master/4.y.z-stream.md#create-prod-operator-metadata-containers)
 
-As an example, the contents of the root and `jobs/build/openshift-scripts` directories in master are currently:
+Stage and especially prod builds for different versions MUST be pushed (to
+stage or prod, respectively) in the same order that they are built to avoid
+premature or regressed metadata for other versions.
 
-    ├── build-scripts
-    │   └── …
-    ├── Jenkinsfile
-    ├── jobs
-    │   …
-    │   └── build
-    │       └── openshift-scripts
-    │           ├── Jenkinsfile
-    │           ├── README.md
-    │           └── scripts
-    │               └── merge-and-build-openshift-scripts.sh
-    …
-    └── README.md
+The first prod build in a release cycle should not be performed until at least
+Friday before a release, in case we need to change the order of releases for
+some reason (it has happened).
 
-The final contents of the `build/openshift-scripts` branch, after the execution of the job, will be:
+## Becoming obsolete
 
-    ├── build-scripts
-    │   └── …
-    ├── Jenkinsfile
-    ├── README.md
-    …
-    └── scripts
-        └── merge-and-build-openshift-scripts.sh
+In 4.6 we plan to use an entirely new workflow for publishing operator
+manifests. Once we have fully moved over to bundle builds for all versions, we
+can decommission this job and have a celebration.
 
-Note that the files `Jenkinsfile` and `README.md` in the master branch exist both in the root directory and in the job directory.
-Because of the sequence of steps described above, the former will be overwritten by the latter.
+## Parameters
 
-Jobs under the `jobs/build/` directory are indexed at the
-[`aos-cd-builds`](https://buildvm.openshift.eng.bos.redhat.com:8443/job/aos-cd-builds/) grouping. Some jobs are described below. 
+### Standard BUILD\_VERSION, MOCK, SUPPRESS\_EMAIL
 
-|          Job Name          | Description |
-| -------------------------- | ----------- |
-| `build/ocp`                | Main build task for OCP 3.7. Also builds openshift-ansible 3.7 and all OCP images. |
-| `build/ose`                | Main build task for OCP <=3.6. Also builds openshift-ansible artifiacts and jenkins images. |
-| `build/make-puddle`        | Create an Atomic OpenShift puddle on `rcm-guest`. |
-| `build/openshift-scripts`  | Builds RPMs and container images for the [OpenShift Online](https://github.com/openshift/online) team. |
-| `build/refresh-images`     |             |
-| `build/scan-images`        | Scans the images for CVEs using openscap. |
-| `sprint/stage-to-prod`     | Promote RPMs from the staging repositories to the production repositories (Copies files from [latest/ in the enterprise online-stg](https://mirror.openshift.com/enterprise/online-stg/latest/) repo to [online-prod/lastest](https://mirror.openshift.com/enterprise/online-prod/latest/). Also copies files from [libra rhel-7-libra-stage](https://mirror.ops.rhcloud.com/libra/rhel-7-libra-stage/) to [libra's latest online-prod](https://mirror.ops.rhcloud.com/libra/online-prod/latest/) in a new directory based on the day's date.). |
-| `sprint/control`           | Send out messages about dev/stage cut to engineering teams. |
-| `package-dockertested`     | Tests new Brew builds of Docker and tags them into a [mirror repo](https://mirror.openshift.com/enterprise/rhel/dockerextra/x86_64/os/Packages/) for use by the CI systems. |
-| `starter/operation`        | Run specific operations on starter clusters. |
-| `starter/upgrade`          | Runs an openshift-ansible based upgrade on a starter cluster. |
+See [Standard Parameters](/jobs/README.md#standard-parameters).
 
-## Jenkins Job Builder configuration under `jjb/`
+### IMAGES
 
-Jenkins Job Builder definitions under the `jjb/` directory are not currently used to underpin any jobs, but were an investigation
-into how the JJB system was used by the AOS CI team to build and support CI jobs for the `openshift-ansible` repository.
+[List](/jobs/README.md#list-parameters) of image dist-gits to limit selection.
 
-## Continuous Upgrade job configuration under `continuous-upgrade/`
+By default all active images are searched for the
+`com.redhat.delivery.appregistry` label that indicates an OLM operator. This is
+rather slow and sometimes you are only interested in a subset.
 
-Continuous Upgrade job is using Jenkins Job Builder framework to continuously upgrade an Openshift cluster.
+Also in the case of a stage/prod build, the source for images is the extras
+advisory; by design, if all known OLM operators are not present, an error is
+raised to prevent accidentally not shipping operators. If this is in fact
+intentional, you will need to re-run with a constrained list (which is given to
+you in the error message).
 
-To be able to generate XML configuration of continuous-upgrade jobs you need to install [jenkins-jobs tool](https://docs.openstack.org/infra/jenkins-job-builder/installation.html). After installing the tool run [`continuous-upgrade/generate-jobs.py`](continuous-upgrade/generate-jobs.py) to re-generate XMLs of the jobs. 
+### STREAM
 
-To push the changes in any of the jobs to the server use:
-```shell
-sjb/push-update.sh continuous-upgrade/generated/continuous-upgrade_JOB_NAME.xml
-```
+The goal is to get metadata into an appregistry where OLM can read it.
 
-## Custom XML Generator configuration under `sjb/`
+* dev: these run continuously after images are built, and publish to
+  appregistry redhat-operators-art.
+* stage: these are intended for stage testing in an advisory which publishes
+  them to appregistry redhat-operators-stage.
+* prod: these are intended for production release in an advisory which
+  publishes them to appregistry redhat-operators (public).
 
-A custom XML generator lives under the `sjb/` directory. This generator is meant to be a tightly scoped tool that would help us
-bridge the gap between monolithic scripts inside of Freestyle Jenkins Jobs and segmented Jenkins Pipelines driven by source-
-controlled Groovy scripts and libraries.
+All versions of an operator share the same metadata containers. A single
+metadata container publishes manifests for all versions at the time.  So for
+each stream, only one build can be running at a time, and others are locked.
 
-The generator understands a small set of `action`s, each of which is underpinned by a Python module under
-[`sjb/actions/`](sjb/actions). A configuration YAML file is read in by [`sjb/generate.py`](sjb/generate.py) and used to generate a
-set of input variables to the [Jinja job template XML](sjb/templates/test_case.xml). Jobs can depend on a parent to reuse
-configuration. Documentation on the YAML syntax can be found at [`syntax.md`](./sjb/syntax.md).
+### OLM\_OPERATOR\_ADVISORIES
 
-A typical workflow for a developer making changes to the job would look like:
+[List](/jobs/README.md#list-parameters) of advisories where OLM operators are
+attached (usually just one, but sometimes operator builds are in a separate
+RHSA).
+* These source advisories are required for `stage` and `prod` STREAMs
 
- - make edits to a configuration file under `sjb/config/`
- - run `sjb/generate.sh`
- - commit changes
- - run `sjb/push-update-automatic.sh` once changes are approved and merged into `master`
+These are advisory numbers like `57834`.
 
-Your local environment needs Python dependencies installed to run `sjb/generate.sh` - this can be done via the command `$ pip install -r sjb/requirements.txt`.
-You will also need [pip](https://pypi.org/project/pip/), which comes bundled with most Python distributions.
+### METADATA\_ADVISORY
 
-In order to test a job, it is necessary to copy a configuration file under `sjb/config` to a new YAML file with a different name,
-then re-generate XML and use the following command to push only your test job up to the server:
-```shell
-sjb/push-update.sh sjb/generated/YOUR_TEST_JOB.xml
-````
-Cleanup of these jobs post-test is still manual.
+For `stage` and `prod` STREAMs, this provides the advisory to attach metadata
+builds that are produced.
 
-If changes are being made to the files under `sjb/` in this repository, it is not enough to copy a job configuration and run it to
-test the changes. Instead, it will be necessary to mark the copied job as syncing a pull request for `aos-cd-jobs` using the `type`
-field on the repository as per [the spec](./sjb/syntax.md#sync_repos). Then, when running your copied job, configure it at run-time
-to merge in your pull request by entering in your pull request number in the appropriate parameter field in the Jenkins UI when
-starting the job.
+This is a metadata advisory number like `57835`.
 
-### Push Credentials
+### FORCE\_METADATA\_BUILD
 
-Note: the `sjb/push-update{,-automatic}.sh` scripts expect `$USERNAME` and `$PASSWORD` to be set as envars when they are run.
-`$USERNAME` is your user with which you log in to the Jenkins master at [ci.openshift](http://ci.openshift.redhat.com/).
-`$PASSWORD` is a Jenkins API token you have to generate through the Jenkins UI. As a logged-in user, click your username in the upper right hand of the UI. After the account page loads, click "Configure" on the right hand side, and after the configuration page loads, you will see an option to generate a new token. Copy this to your password store, since it is only displayed for copy/pasting when you first generate it.
-The `$USERNAME` and `$PASSWORD` are used for basic auth against the server on push actions.
+Always attempt to build the operator metadata, even if there is no new manifest to include.
 
-## Pull Request approvers under `approvers/`
+Most of the time, manifest updates are idempotent. If there is nothing new to
+include, there is no real reason to rebuild an image, so it is skipped.
 
-In order to ensure that pull requests are only merged during phases of a sprint where they are appropriate, all `[merge]` jobs now
-call out to an approver on the Jenkins master that will determine if the pull request should merge into the specific branch and
-repo that it targets.
+This option overrides that and builds metadata images for all operators
+regardless. Most of the time, there is no reason to use this. The main reason
+to use it would be to work around an error in our code.
 
-When running `[merge]` on a PR, developers will optionally be able to add `[severity: value]` extensions, where value can take:
+### SKIP\_PUSH
 
- - none ( `[merge]` )
- - bug ( `[merge][severity: bug]` )
- - blocker ( `[merge][severity: blocker]` )
- - low-risk ( `[merge][severity: lowrisk]` )
+(`dev` stream only) Do not push operator metadata to OMPS. This would mostly be
+useful for testing builds and not wanting to wait on the OMPS push.
 
-The `lowrisk` severity is special in that all approvers other than the [`closed_approver.sh`](approvers/closed_approver.sh), will
-allow merges with it. Developers should use this tag when they are making changes to code in the repository that does not make up
-any part of the shipped product and therefore does not have any chance of impacting deployments.
+### MAIL\_LIST\_FAILURE
 
-There will be four possible designations for any branch in your repo:
+Failure Mailing List - who to email when the job fails.
 
-<table>
-  <tr>
-    <th colspan="2" rowspan="2"></th>
-    <th colspan="4">Pull Request Severity<br></th>
-  </tr>
-  <tr>
-    <td>None</td>
-    <td>Bug</td>
-    <td>Blocker</td>
-    <td>Low-Risk</td>
-  </tr>
-  <tr>
-    <td rowspan="4">Branch Stage<br></td>
-    <td>Open</td>
-    <td>✔️</td>
-    <td>✔️</td>
-    <td>✔️</td>
-    <td>✔️</td>
-  </tr>
-  <tr>
-    <td>DevCut</td>
-    <td>❌</td>
-    <td>✔️</td>
-    <td>✔️</td>
-    <td>✔️</td>
-  </tr>
-  <tr>
-    <td>StageCut</td>
-    <td>❌</td>
-    <td>❌</td>
-    <td>✔️</td>
-    <td>✔️</td>
-  </tr>
-  <tr>
-    <td>Closed</td>
-    <td>❌</td>
-    <td>❌</td>
-    <td>❌</td>
-    <td>❌</td>
-  </tr>
-</table>
+## Known issues
 
-### Consulting an Approver
+### "operators not found" / "Advisories missing operators"
 
-In order to determine if a pull request should merge, consult the [`approve.sh`](approvers/approve.sh) script on the Jenkins
-master on which the job runs:
+In stage/prod builds, the source for images is the extras advisory; by design,
+if all known OLM operators are not present, an error is raised to prevent
+accidentally not shipping operators. If this is in fact intentional, you will
+need to re-run with a constrained list (which is given to you in the error
+message).
 
-```shell
-approve.sh "${REPO}" "${TARGET_BRANCH}" "${MERGE_SEVERITY:-"none"}"
-```
+### "Expecting value: line X column 1 (char 0)"
 
-### Configuring Branch Status
+This is a very obscure error message that indicates one or more of the operator
+metadata containers wasn't built successfully. Figure out which one(s) are
+missing and why they failed.
 
-To configure a branch status, run the [`configure_approver`](https://ci.dev.openshift.redhat.com/jenkins/job/configure_approver/)
-job on the [ci.dev](https://ci.dev.openshift.redhat.com/jenkins/) Jenkins master. This job will configure the approver you ask
-for as well as propagate the changes to the [ci.openshift](http://ci.openshift.redhat.com/) server. The job runs the
-[`configure_approver`](approvers/configure_approver.sh) script:
+### Timing out on dev pushes
 
-```shell
-for repo in ${REPOSITORIES}; do
-    for branch in ${BRANCHES}; do
-        configure_approver.sh "${repo}" "${branch}" "${STAGE}"
-    done
-done
+The dev flow requires the Container Verification Pipeline (CVP) to run against
+the metadata container.  The CVP runs asynchronously after the OSBS image build
+and is sometimes backed up or otherwise broken.  After 2 hours, the job gives
+up and fails whatever hasn't completed. This is not usually a problem that we
+actually need to do anything about, since the next run will update it, and
+anyway, this is only dev.
 
-list_approvers.sh
-```
+### Failures in the actual manifests
 
-### Approver Design
+The CVP runs operator manifest CSVs through a validation tool called
+"Greenwave" which flags certain problems in the manifests. If these are
+failing, we need to notify the operator owners to fix their manifests.
 
-Approvers are configured by creating a symbolic link at `~jenkins/approvers/openshift/${REPO}/${TARGET_BRANCH}/approver` for the
-approver that is requested for that branch. The approvers are the [`closed_approver.sh`](approvers/closed_approver.sh),
-[`open_approver.sh`](approvers/open_approver.sh), [`devcut_approver.sh`](approvers/devcut_approver.sh), and
-[`stagecut_approver.sh`](approvers/stagecut_approver.sh) scripts in this repository under [`approvers/`](approvers/).
+### Oops, I ran a prod push out of order and need to back it out
 
-### Developer Workflow
+Use this job to revert all operators affected (usually all) to the previous release.
 
-Development on approver scripts in this repository is fairly straightforward. When your changes are ready and have been merged,
-run the [`push.sh`](approvers/push.sh) script to deploy your changes to the Jenkins masters. You will need to have your SSH config
-set up for the `ci.openshift` and `ci.dev.openshift` hosts in order for this script to work.
+1. Determine the extras advisory for the previous release for this minor version.
+  * Look at e.g. https://errata.devel.redhat.com/package/show/elasticsearch-operator-container
+2. Run this job with that advisory as the operator source.
+3. Run this job again for the minor version you need to release first.
