@@ -23,11 +23,27 @@ node() {
     for ( String version : sortedVersions() ) {
 
         openshift_group = "openshift-${version}"
-        plashet_arch_args = ""
-        def arches = buildlib.branch_arches(openshift_group)
-        for ( String arch : arches ) {
-            plashet_arch_args += "--arch ${arch} unsigned "
-        }
+        plashet_arch_args = buildlib.branch_arches(openshift_group).collect { "--arch ${it} unsigned " }
+        include_previous_args = [
+            "ironic-images",
+            "ironic-images-ipa-ppc64le",
+            "ironic-images-ipa-x86_64",
+            "openstack-ironic",
+            "openstack-ironic-inspector",
+            "openstack-ironic-python-agent",
+            "python-dracclient",
+            "python-ironic-inspector-client",
+            "python-ironic-lib",
+            "python-ironic-prometheus-exporter",
+            "python-ironicclient",
+            "python-openstackclient",
+            "python-openstacksdk",
+            "python-pyghmi",
+            "python-proliantutils",
+            "python-scciclient",
+            "python-sushy",
+            "python-sushy-oem-idrac",
+        ].collect { "--include-previous-for ${it}" }
 
         /**
          * Build a plashet in a local directory under the WORKSPACE ${baseDir}/${plashetDirName} .
@@ -41,7 +57,8 @@ node() {
                 "--base-dir ${baseDir}",  // Directory in which to create the yum repo
                 "--name ${plashetDirName}",  // The name of the directory to create within baseDir to contain the arch repos.
                 "--repo-subdir os",  // This is just to be compatible with legacy doozer puddle layouts which had {arch}/os.
-                plashet_arch_args,
+                *plashet_arch_args,
+                *include_previous_args,
                 "from-tags", // plashet mode of operation => build from brew tags
                 "--brew-tag ${prevalidation_tag_name} NOT_APPLICABLE",  // product name is not required since we aren't signing
         ].join(' '))
