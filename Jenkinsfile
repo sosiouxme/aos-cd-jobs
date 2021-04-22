@@ -1,66 +1,74 @@
-properties(
-  [
-    disableConcurrentBuilds(),
-    disableResume(),
-    buildDiscarder(
-      logRotator(
-        artifactDaysToKeepStr: '60',
-        daysToKeepStr: '60')
-    ),
-  ]
-)
+#!/usr/bin/env groovy
 
-// https://issues.jenkins-ci.org/browse/JENKINS-33511
-def set_workspace() {
-  if(env.WORKSPACE == null) {
-    env.WORKSPACE = WORKSPACE = pwd()
-  }
-}
+node {
+    checkout scm
+    def release = load("pipeline-scripts/release.groovy")
+    def commonlib = release.commonlib
+    commonlib.describeJob("cincinnati-prs", """
+        <hr />
+        <h2>Create the PRs for Cincinnati to publish a release</h2>
+        <hr />
+        <p><b>Timing</b>: The "release" job runs this once the release is accepted.</p>
+        This creates PRs to enter the new release in all the relevant Cincinnati channels <a href="https://github.com/openshift/cincinnati-graph-data/tree/master/channels" target="_blank">here</a>
+        <a href="https://github.com/openshift/aos-cd-jobs/blob/master/jobs/build/cincinnati-prs/README.md">For more details see the README.</a>
+    """)
 
-node('openshift-build-1') {
-  try {
-    timeout(time: 30, unit: 'MINUTES') {
-      deleteDir()
-      set_workspace()
-      dir('aos-cd-jobs') {
-        stage('clone') {
-          checkout scm
-          sh 'git checkout master'
-        }
-        stage('run') {
-          final url = sh(
-            returnStdout: true,
-            script: 'git config remote.origin.url')
-          if(!(url =~ /^[-\w]+@[-\w]+(\.[-\w]+)*:/)) {
-            error('This job uses ssh keys for auth, please use an ssh url')
-          }
-          def prune = true, key = 'openshift-bot'
-          if(url.trim() != 'git@github.com:openshift/aos-cd-jobs.git') {
-            prune = false
-            key = "${(url =~ /.*:([^\/]+)/)[0][1]}-aos-cd-bot"
-          }
-          sshagent([key]) {
-            sh """\
-virtualenv ../env/ -p python3
-. ../env/bin/activate
-pip install gitpython
-export GIT_PYTHON_TRACE=full
-${prune ? 'python -m aos_cd_jobs.pruner' : 'echo Fork, skipping pruner'}
-python -m aos_cd_jobs.updater
-"""
-          }
-        }
-      }
+    // Please update README.md if modifying parameter names or semantics
+    properties(
+        [
+            buildDiscarder(
+                logRotator(
+                    artifactDaysToKeepStr: '',
+                    artifactNumToKeepStr: '',
+                    daysToKeepStr: '',
+                    numToKeepStr: '500')),
+            [
+                $class: 'ParametersDefinitionProperty',
+                parameterDefinitions: [
+                    string(
+                        name: 'RELEASE_NAME',
+                        description: 'The name of the release to add to Cincinnati via PRs',
+                        defaultValue: "",
+                        trim: true,
+                    ),
+                    string(
+                        name: 'ADVISORY_NUM',
+                        description: 'Internal advisory number for release (i.e. https://errata.devel.redhat.com/advisory/??????)',
+                        defaultValue: "",
+                        trim: true,
+                    ),
+                    booleanParam(
+                        name: 'CANDIDATE_CHANNEL_ONLY',
+                        description: 'Only open a PR for the candidate channel',
+                        defaultValue: false
+                    ),
+                    string(
+                        name: 'GITHUB_ORG',
+                        description: 'The github org containing cincinnati-graph-data fork to open PRs against (use for testing)',
+                        defaultValue: "openshift",
+                        trim: true,
+                    ),
+                    booleanParam(
+                        name: 'SKIP_OTA_SLACK_NOTIFICATION',
+                        description: 'Do not notify OTA team',
+                        defaultValue: false
+                    ),
+                    commonlib.mockParam(),
+                ]
+            ],
+            disableResume(),
+            disableConcurrentBuilds()
+        ]
+    )   // Please update README.md if modifying parameter names or semantics
+
+    commonlib.checkMock()
+    workdir = "${env.WORKSPACE}/workdir"
+    buildlib.cleanWorkdir(workdir, true)
+    currentBuild.displayName = params.RELEASE_NAME
+    currentBuild.description = ""
+    dir(workdir) {
+        release.openCincinnatiPRs(params.RELEASE_NAME.trim(), params.ADVISORY_NUM.trim(), params.CANDIDATE_CHANNEL_ONLY, params.GITHUB_ORG.trim(), params.SKIP_OTA_SLACK_NOTIFICATION)
     }
-  } catch(err) {
-    mail(
-      to: 'jupierce@redhat.com',
-      from: "aos-cicd@redhat.com",
-      subject: 'aos-cd-jobs-branches job: error',
-      body: """\
-Encountered an error while running the aos-cd-jobs-branches job: ${err}\n\n
-Jenkins job: ${env.BUILD_URL}
-""")
-    throw err
-  }
+    buildlib.cleanWorkdir(workdir)
+    buildlib.cleanWorkspace()
 }
