@@ -1,233 +1,283 @@
-# aos-cd-jobs
+# Promote OCP 4 release images
 
-This repository backs Jenkins jobs on a couple of Jenkins masters.
+## Purpose
 
-## Jenkins pipeline definitions under `scheduled-jobs/`
+This job creates release images as described in the
+[4.y z-stream doc](https://github.com/openshift/art-docs/blob/master/4.y.z-stream.md#create-the-release-image)
+and publishes them to be available for customers.
 
-Scheduled pipeline definitions are stored in this directory so they are not
-indexed by the process described below and turned into a branch on the
-multi-branch pipeline.  This is done to facilitate enabling and disabling the
-jobs without needing to change the source code on the repository, and any job
-that requires that should be under this directory.
+The "release image" (also known as the "payload") represents the core OpenShift
+artifacts. It is a container image built on the `cluster-version-operator`
+member, adding references to all of the container images that are considered
+part of core OpenShift. These references are pullspecs to where those images
+can be found (by sha256sum) under the monorepo
+quay.io/openshift-release-dev/ocp-v4.0-art-dev
 
-|     Job Name     | Description |
-| ---------------- | ----------- |
-| `build/ose`      | Runs build/ose daily. Presently used to build 3.6 for daily integration test environments. |
-| `build/t-th`     | Runs build/ose every Tuesday and Thursday for particular builds of OCP. |
+Extras images (OLM operators/operands/bundles, miscellaneous tools) are not
+part of the release image (though they are part of a release), and must be
+published and pulled from registry.redhat.io instead of quay.io. Payload
+and extras images are sorted into separate advisories for a release.
 
-## Jenkins pipeline definitions under `jobs/`
+During development, architecture-specific release-controllers create "nightly"
+(the name has stuck although they're created much more often) release images
+for each architecture with all of the latest builds. When ART is preparing for
+a release, we select a set of nightly images (one per arch) for QE to verify.
+The purpose of this job is to re-build and publish a release image for customer
+use after QE verification.
 
-An internal [Continuous Infrastructure Jenkins instance](https://buildvm.openshift.eng.bos.redhat.com:8443/) indexes
-Jenkinsfiles in the branches of this repository.  The branches are automatically generated from the Jenkinsfiles that live under
-the `jobs/` directory on the `master` branch. The job responsible for generating, updating and removing the branches can be found
-in the [`Jenkinsfile`](Jenkinsfile) at the root directory. The branch update job is configured to be executed periodically, but
-can be manually triggered in [jenkins](https://buildvm.openshift.eng.bos.redhat.com:8443/job/update-branches/).
+For the default use case, this job:
+ * performs basic validation of the release contents
+ * publishes a nightly as an [officially named release image](https://amd64.ocp.releases.ci.openshift.org/#4-stable) with with a list of releases allowed to upgrade to it
+ * waits up to three hours for the release to pass acceptance tests (currently, just upgrade tests)
+ * opens pull requests to [cinci-graph-data](https://github.com/openshift/cincinnati-graph-data/tree/master/channels)
+ * copies the clients to the [mirror](http://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/)
+ * signs the clients and release image
+ * ...and handles other odds and ends for a release
 
-The scripts used by the job described above are [`pruner.py`](aos_cd_jobs/pruner.py), which removes branches for jobs that no
-longer exist, and [`updater.py`](aos_cd_jobs/updater.py), which creates/updates branches for existing jobs. A "job" is any
-directory under the `jobs/` directory which contains a `Jenkinsfile`.  Every branch is an orphan (doesn't contain any history) and
-its contents are the contents of the `master` branch with the corresponding directory under `jobs/` copied to the root directory
-and the `jobs/` directory removed.
+There are minor differences when this job runs for FCs, RCs, or hotfixes.
 
-As an example, the contents of the root and `jobs/build/openshift-scripts` directories in master are currently:
+The job may pause for user input when needed or if verification fails. It sends
+slack alerts in a relevant release channel (like `art-release-4-7`) when this occurs.
 
-    ├── build-scripts
-    │   └── …
-    ├── Jenkinsfile
-    ├── jobs
-    │   …
-    │   └── build
-    │       └── openshift-scripts
-    │           ├── Jenkinsfile
-    │           ├── README.md
-    │           └── scripts
-    │               └── merge-and-build-openshift-scripts.sh
-    …
-    └── README.md
+## Timing
 
-The final contents of the `build/openshift-scripts` branch, after the execution of the job, will be:
+This job is run manually per the release schedule. Currently it has to be run
+separately per architecture, but we should wait for all architectures to be
+ready before beginning any.
 
-    ├── build-scripts
-    │   └── …
-    ├── Jenkinsfile
-    ├── README.md
-    …
-    └── scripts
-        └── merge-and-build-openshift-scripts.sh
+Promotion should wait for QE to have a chance to review, and should not occur
+if there are blockers outstanding for a release. It may be delayed or omitted
+as needed. In general, it is best if it occurs early in the day as the
+acceptance tests are more likely to pass then.
 
-Note that the files `Jenkinsfile` and `README.md` in the master branch exist both in the root directory and in the job directory.
-Because of the sequence of steps described above, the former will be overwritten by the latter.
+## Parameters
 
-Jobs under the `jobs/build/` directory are indexed at the
-[`aos-cd-builds`](https://buildvm.openshift.eng.bos.redhat.com:8443/job/aos-cd-builds/) grouping. Some jobs are described below. 
+### Standard parameters DRY\_RUN, MOCK
 
-|          Job Name          | Description |
-| -------------------------- | ----------- |
-| `build/ocp`                | Main build task for OCP 3.7. Also builds openshift-ansible 3.7 and all OCP images. |
-| `build/ose`                | Main build task for OCP <=3.6. Also builds openshift-ansible artifiacts and jenkins images. |
-| `build/make-puddle`        | Create an Atomic OpenShift puddle on `rcm-guest`. |
-| `build/openshift-scripts`  | Builds RPMs and container images for the [OpenShift Online](https://github.com/openshift/online) team. |
-| `build/refresh-images`     |             |
-| `build/scan-images`        | Scans the images for CVEs using openscap. |
-| `sprint/stage-to-prod`     | Promote RPMs from the staging repositories to the production repositories (Copies files from [latest/ in the enterprise online-stg](https://mirror.openshift.com/enterprise/online-stg/latest/) repo to [online-prod/lastest](https://mirror.openshift.com/enterprise/online-prod/latest/). Also copies files from [libra rhel-7-libra-stage](https://mirror.ops.rhcloud.com/libra/rhel-7-libra-stage/) to [libra's latest online-prod](https://mirror.ops.rhcloud.com/libra/online-prod/latest/) in a new directory based on the day's date.). |
-| `sprint/control`           | Send out messages about dev/stage cut to engineering teams. |
-| `package-dockertested`     | Tests new Brew builds of Docker and tags them into a [mirror repo](https://mirror.openshift.com/enterprise/rhel/dockerextra/x86_64/os/Packages/) for use by the CI systems. |
-| `starter/operation`        | Run specific operations on starter clusters. |
-| `starter/upgrade`          | Runs an openshift-ansible based upgrade on a starter cluster. |
+See [Standard Parameters](/jobs/README.md#standard-parameters).
 
-## Jenkins Job Builder configuration under `jjb/`
+### FROM\_RELEASE\_TAG
 
-Jenkins Job Builder definitions under the `jjb/` directory are not currently used to underpin any jobs, but were an investigation
-into how the JJB system was used by the AOS CI team to build and support CI jobs for the `openshift-ansible` repository.
+The existing release tag to pull from (e.g. 4.6.0-0.nightly-s390x-2020-11-06-181325).
+This should be listed as `Accepted` in one of the release-controllers: \[
+  [x86\_64](https://amd64.ocp.releases.ci.openshift.org/) |
+  [s390x](https://s390x.ocp.releases.ci.openshift.org/) |
+  [ppc64le](https://ppc64le.ocp.releases.ci.openshift.org/)
+  \]
 
-## Continuous Upgrade job configuration under `continuous-upgrade/`
+Normally a release ARTist will be promoting a nightly, but it is also possible
+to re-promote an RC build to a GA release.
 
-Continuous Upgrade job is using Jenkins Job Builder framework to continuously upgrade an Openshift cluster.
+### RELEASE\_TYPE
 
-To be able to generate XML configuration of continuous-upgrade jobs you need to install [jenkins-jobs tool](https://docs.openstack.org/infra/jenkins-job-builder/installation.html). After installing the tool run [`continuous-upgrade/generate-jobs.py`](continuous-upgrade/generate-jobs.py) to re-generate XMLs of the jobs. 
+This specifies what type of release to publish for customer use. Releases may be:
 
-To push the changes in any of the jobs to the server use:
-```shell
-sjb/push-update.sh continuous-upgrade/generated/continuous-upgrade_JOB_NAME.xml
-```
+* **named** (given a different name from their source release image)
+* Built with **signed** RPMs
+* Upgrade targets (by specifying **previous** releases that can upgrade to them)
+* Destined for various Cincinnati **channels**
 
-## Custom XML Generator configuration under `sjb/`
+The types are:
 
-A custom XML generator lives under the `sjb/` directory. This generator is meant to be a tightly scoped tool that would help us
-bridge the gap between monolithic scripts inside of Freestyle Jenkins Jobs and segmented Jenkins Pipelines driven by source-
-controlled Groovy scripts and libraries.
+**1. Standard Release (Named, Signed, Previous, All Channels)**
 
-The generator understands a small set of `action`s, each of which is underpinned by a Python module under
-[`sjb/actions/`](sjb/actions). A configuration YAML file is read in by [`sjb/generate.py`](sjb/generate.py) and used to generate a
-set of input variables to the [Jinja job template XML](sjb/templates/test_case.xml). Jobs can depend on a parent to reuse
-configuration. Documentation on the YAML syntax can be found at [`syntax.md`](./sjb/syntax.md).
+This is what we use the job for most of the time - GA and z-stream releases.
 
-A typical workflow for a developer making changes to the job would look like:
+**2. Release Candidate (Named, Signed, Previous, Candidate Channel)**
 
- - make edits to a configuration file under `sjb/config/`
- - run `sjb/generate.sh`
- - commit changes
- - run `sjb/push-update-automatic.sh` once changes are approved and merged into `master`
+Release candidates are intended to be actual candidates for being released
+as-is at a minor version GA. As such, they should have populated advisories
+that are valid to ship. These are pretty much ART practice runs for the real
+GA.
 
-Your local environment needs Python dependencies installed to run `sjb/generate.sh` - this can be done via the command `$ pip install -r sjb/requirements.txt`.
-You will also need [pip](https://pypi.org/project/pip/), which comes bundled with most Python distributions.
+**3. Feature Candidate (Named, Signed - rpms may not be, Previous, Candidate Channel)**
 
-In order to test a job, it is necessary to copy a configuration file under `sjb/config` to a new YAML file with a different name,
-then re-generate XML and use the following command to push only your test job up to the server:
-```shell
-sjb/push-update.sh sjb/generated/YOUR_TEST_JOB.xml
-````
-Cleanup of these jobs post-test is still manual.
+Feature candidates enable customers/partners/developers to try out the features
+coming in a new minor version, as well as upgrades. These are crucial to enable
+the ecosystem to discover bugs as well.
 
-If changes are being made to the files under `sjb/` in this repository, it is not enough to copy a job configuration and run it to
-test the changes. Instead, it will be necessary to mark the copied job as syncing a pull request for `aos-cd-jobs` using the `type`
-field on the repository as per [the spec](./sjb/syntax.md#sync_repos). Then, when running your copied job, configure it at run-time
-to merge in your pull request by entering in your pull request number in the appropriate parameter field in the Jenkins UI when
-starting the job.
+FCs begin after feature freeze and continue regularly until we are ready for a
+release candidate (hopefully, at code freeze). From ART's perspective they are
+simply renamed nightlies and should not use signed RPMs or even have
+advisories. However, these are entered in Cincinnati candidate channels to
+enable exercising upgrades normally.
 
-### Push Credentials
+**4. Hotfix (No name, Signed, No Previous, All Channels)**
 
-Note: the `sjb/push-update{,-automatic}.sh` scripts expect `$USERNAME` and `$PASSWORD` to be set as envars when they are run.
-`$USERNAME` is your user with which you log in to the Jenkins master at [ci.openshift](http://ci.openshift.redhat.com/).
-`$PASSWORD` is a Jenkins API token you have to generate through the Jenkins UI. As a logged-in user, click your username in the upper right hand of the UI. After the account page loads, click "Configure" on the right hand side, and after the configuration page loads, you will see an option to generate a new token. Copy this to your password store, since it is only displayed for copy/pasting when you first generate it.
-The `$USERNAME` and `$PASSWORD` are used for basic auth against the server on push actions.
+A hotfix is basically a nightly that gets added to Cincinnati channels. It is
+used to solve an acute customer problem and intended only to be used until the
+next z-stream release. It is added to channels only to enable the customer to
+upgrade *away* from it in a supported fashion (they must do a "force" ugprade
+*to* it in the first place).
 
-## Pull Request approvers under `approvers/`
+### ARCH
 
-In order to ensure that pull requests are only merged during phases of a sprint where they are appropriate, all `[merge]` jobs now
-call out to an approver on the Jenkins master that will determine if the pull request should merge into the specific branch and
-repo that it targets.
+This should nearly always be `auto` for promoting a nightly, since the nightly
+name implies which architecture to use; but it is also possible to re-promote
+an RC release to a GA release, and since an RC release has multiple
+architectures, the `ARCH` parameter must be specified to distinguish which
+architecture to promote.
 
-When running `[merge]` on a PR, developers will optionally be able to add `[severity: value]` extensions, where value can take:
+### RELEASE\_OFFSET
 
- - none ( `[merge]` )
- - bug ( `[merge][severity: bug]` )
- - blocker ( `[merge][severity: blocker]` )
- - low-risk ( `[merge][severity: lowrisk]` )
+Releases are distinguished from others in the same minor version only by an integer offset.
+This offset (call it X) is used to construct the release name depending on the release type:
 
-The `lowrisk` severity is special in that all approvers other than the [`closed_approver.sh`](approvers/closed_approver.sh), will
-allow merges with it. Developers should use this tag when they are making changes to code in the repository that does not make up
-any part of the shipped product and therefore does not have any chance of impacting deployments.
+1. Standard Release: `4.y.X`
+2. Release Candidate: `4.y.0-rc.X`
+3. Feature Candidate: `4.y.0-fc.X`
+4. Hotfix: do not specify an offset; the name of the nightly is re-used.
 
-There will be four possible designations for any branch in your repo:
+### DESCRIPTION
 
-<table>
-  <tr>
-    <th colspan="2" rowspan="2"></th>
-    <th colspan="4">Pull Request Severity<br></th>
-  </tr>
-  <tr>
-    <td>None</td>
-    <td>Bug</td>
-    <td>Blocker</td>
-    <td>Low-Risk</td>
-  </tr>
-  <tr>
-    <td rowspan="4">Branch Stage<br></td>
-    <td>Open</td>
-    <td>✔️</td>
-    <td>✔️</td>
-    <td>✔️</td>
-    <td>✔️</td>
-  </tr>
-  <tr>
-    <td>DevCut</td>
-    <td>❌</td>
-    <td>✔️</td>
-    <td>✔️</td>
-    <td>✔️</td>
-  </tr>
-  <tr>
-    <td>StageCut</td>
-    <td>❌</td>
-    <td>❌</td>
-    <td>✔️</td>
-    <td>✔️</td>
-  </tr>
-  <tr>
-    <td>Closed</td>
-    <td>❌</td>
-    <td>❌</td>
-    <td>❌</td>
-    <td>❌</td>
-  </tr>
-</table>
+Should be empty unless you know otherwise. This adds text in the release image
+metadata that we have never actually had a use for. It has been available since
+the beginning of OCP 4 and remains available in case we ever find a use for it.
 
-### Consulting an Approver
+### ADVISORY
 
-In order to determine if a pull request should merge, consult the [`approve.sh`](approvers/approve.sh) script on the Jenkins
-master on which the job runs:
+We need to know the advisory that will be used to ship the payload (AKA `image`
+advisory in `group.yml`). We will link to its Live ID in the image metadata and
+the release notes. We will also use it for release verification (that payload
+images are attached, that bugs are valid, and whatever else we come up with).
 
-```shell
-approve.sh "${REPO}" "${TARGET_BRANCH}" "${MERGE_SEVERITY:-"none"}"
-```
+**Most of the time you can leave this blank** and the `image` advisory from
+`group.yml` will be used.
 
-### Configuring Branch Status
+* For RC, GA and z-stream promotion normally this would be accurate.
+* FCs and hotfixes don't use this at all.
 
-To configure a branch status, run the [`configure_approver`](https://ci.dev.openshift.redhat.com/jenkins/job/configure_approver/)
-job on the [ci.dev](https://ci.dev.openshift.redhat.com/jenkins/) Jenkins master. This job will configure the approver you ask
-for as well as propagate the changes to the [ci.openshift](http://ci.openshift.redhat.com/) server. The job runs the
-[`configure_approver`](approvers/configure_approver.sh) script:
+For a `DRY_RUN` where you don't want advisory/release validation, you can put
+`-1` here to skip it. There may be other edge cases where you want a manual
+override.
 
-```shell
-for repo in ${REPOSITORIES}; do
-    for branch in ${BRANCHES}; do
-        configure_approver.sh "${repo}" "${branch}" "${STAGE}"
-    done
-done
+Once we have `releases.yml` automation this should go away entirely in favor of
+using the advisories from our configuration.
 
-list_approvers.sh
-```
+### PREVIOUS
 
-### Approver Design
+This is used to specify which releases to allow to upgrade to this release.
 
-Approvers are configured by creating a symbolic link at `~jenkins/approvers/openshift/${REPO}/${TARGET_BRANCH}/approver` for the
-approver that is requested for that branch. The approvers are the [`closed_approver.sh`](approvers/closed_approver.sh),
-[`open_approver.sh`](approvers/open_approver.sh), [`devcut_approver.sh`](approvers/devcut_approver.sh), and
-[`stagecut_approver.sh`](approvers/stagecut_approver.sh) scripts in this repository under [`approvers/`](approvers/).
+If you leave it as `auto`, you will be prompted later in the job with suggested
+previous releases.  Otherwise, follow
+[item #6 "PREVIOUS" of the z-stream doc](https://github.com/openshift/art-docs/blob/master/4.y.z-stream.md#create-the-release-image)
+for instructions on how to fill this field.
 
-### Developer Workflow
+Once we have `releases.yml` automation this should go away entirely in favor of
+determining the releases from our configuration.
 
-Development on approver scripts in this repository is fairly straightforward. When your changes are ready and have been merged,
-run the [`push.sh`](approvers/push.sh) script to deploy your changes to the Jenkins masters. You will need to have your SSH config
-set up for the `ci.openshift` and `ci.dev.openshift` hosts in order for this script to work.
+### PERMIT\_PAYLOAD\_OVERWRITE
+
+**DO NOT USE** without discussing with your team or pillar lead for approval.
+
+This allows the pipeline to overwrite an existing payload in quay. We have
+done this a few times in the past and it has caused weirdness. Really, if a
+release has been created and we can't use it, we should just create another.
+Probably we should just get rid of this option.
+
+### SKIP\_VERIFY\_BUGS
+
+For a standard release, skip verifying advisory bugs.
+
+You may want to use this to save time on releases with thousands of bugs that
+have already been verified (say while releasing another arch).
+
+### ENABLE\_AUTOMATION
+
+"Yes" will update the `freeze_automation` entry in ocp-build-data to re-enable
+automated incremental builds for this version.
+
+**Default**: "Yes" for Standard and RC releases with arch `x86_64`, "No" otherwise.
+
+Usually we want to do this to allow builds to begin after the release is
+promoted; set to "No" only if you know of a reason why we want to keep the
+version closed to further builds.
+
+### SKIP\_CINCINNATI\_PR\_CREATION
+
+**DO NOT USE** without discussing with your team or pillar lead for approval.
+
+This *prevents* creating PRs to enter the new release in Cincinnati (to make it
+visible to customers for install/upgrade).
+
+### OPEN\_NON\_X86\_PR
+
+Usually Cincinnati PRs will only be opened when `x86_64` releases are created.
+If set, this will force their creation for any CPU arch.
+There is no obvious use case for this.
+
+### SKIP\_OTA\_SLACK\_NOTIFICATION
+
+Do not notify the OTA team in slack about new PRs created for Cincinnati.
+Probably only useful for testing the job.
+
+### PERMIT\_ALL\_ADVISORY\_STATES
+
+**DO NOT USE** without discussing with your team or pillar lead for approval.
+
+There is a validation against the `image` advisory that is intended (among
+other things) to guard against incidents where we accidentally pasted the wrong
+release's advisory. Since those advisories would typically either be new or in
+some stage of the shipping process, validation requires that the advisory be in
+QE state for a Standard promotion.
+
+This option allows Standard promotion when the image advisory is not in `QE`
+state.  You might need this if advisories have already been changed to
+`REL_PREP` - perhaps to promote a late re-spin. There are not many other
+reasons to use this. Before you do, double-check the `image` advisory and
+make sure it's the one you want.
+
+### SKIP\_IMAGE\_LIST
+
+For a Standard `x86_64` release, this job normally gathers a list of images
+from the image advisory and sends it to docs for inclusion in the release notes.
+
+This option prevents that. There is probably not much reason to do this.
+
+### MAIL\_LIST\_SUCCESS
+
+Address(es) to mail when the job succeeds.
+
+### MAIL\_LIST\_FAILURE
+
+Address(es) to mail when the job fails.
+
+## Dependencies
+
+Aside from all the jobs that had to run before this one in order to prepare release artifacts in the first place,
+this job also relies on other jobs as part of its function.
+
+### oc\_sync
+
+Actually this job is _not_ invoked; but the code for syncing the oc client out
+to mirror.openshift.com is shared between the jobs, which is useful when
+something prevents completing the sync step during the promotion.
+
+### signing-jobs/sign-artifacts
+
+Once the release image is created (and if necessary has passed tests), the
+[signing job](https://saml.buildvm.openshift.eng.bos.redhat.com:8888/job/signing-jobs/job/signing%252Fsign-artifacts/)
+is used to sign the release image and oc client with Red Hat's key.
+
+### cincinnati-prs
+
+After signing the release, the
+[cincinnati-prs job](https://saml.buildvm.openshift.eng.bos.redhat.com:8888/job/aos-cd-builds/job/build%252Fcincinnati-prs/)
+is used to create PRs to have the release (and upgrade edges) included in OCP 4
+[release channels](https://github.com/openshift/cincinnati-graph-data/tree/master/channels).
+
+## Known issues
+
+### General flakiness
+
+Considering the importance of this job, it is ironically difficult to change
+and test safely. This is mainly because the job relies on making actual changes
+(creating a release in `4-stable`, syncing clients) and then following up on
+the results, and it's impossible to test all the logic even with a dry run.
+And we only run it a few times a week.
+
+So changes frequently break the job right when we need it and leave a release incomplete.
+
+Most of what should have happened later in the job can be replicated by manually
+running other jobs, which is useful when it breaks for some reason. See:
+[Release job failures](https://github.com/openshift/art-docs/blob/master/4.y.z-stream.md#release-job-failures)
