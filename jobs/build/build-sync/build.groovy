@@ -16,7 +16,7 @@ def initialize() {
     }
     def arches = buildlib.branch_arches("openshift-${params.BUILD_VERSION}").toList()
     if ( params.EXCLUDE_ARCHES ) {
-        excludeArches = commonlib.cleanCommaList(params.EXCLUDE_ARCHES)
+        excludeArches = commonlib.parseList(params.EXCLUDE_ARCHES)
         currentBuild.displayName += " [EXCLUDE ${excludeArches.join(', ')}]"
         if ( !arches.containsAll(excludeArches) )
             error("Trying to exclude arch ${excludeArches} not present in known arches ${arches}")
@@ -24,7 +24,6 @@ def initialize() {
     }
 
     currentBuild.displayName += " OCP ${params.BUILD_VERSION}"
-    - ${arches.join(', ')}"
     currentBuild.description = "Arches: ${arches.join(', ')}"
     if ( params.DEBUG ) {
         logLevel = " --loglevel=5 "
@@ -47,7 +46,8 @@ def buildSyncGenInputs() {
     def images = imageList ? "--images '${imageList}'" : ''
     def brewEventID = params.BREW_EVENT_ID? "--event-id '${params.BREW_EVENT_ID}'" : ''
     def excludeArchesParam = ""
-    for(arch in excludeArches) excludeArchesParam += " --exclude_arch '${params.BREW_EVENT_ID}'" : ''
+    for(arch in excludeArches)
+        excludeArchesParam += " --exclude-arch ${arch}"
     buildlib.doozer """
 ${images}
 --working-dir "${mirrorWorking}" --group 'openshift-${params.BUILD_VERSION}'
