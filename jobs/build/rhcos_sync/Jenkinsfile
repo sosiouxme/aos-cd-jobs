@@ -45,7 +45,7 @@ node {
                     choice(
                         name: 'ARCH',
                         description: 'Which architecture of RHCOS build to look for',
-                        choices: (['x86_64', 's390x', 'ppc64le', 'aarch64']),
+                        choices: commonlib.brewArches,
                     ),
                     choice(
                         name: 'RHCOS_MIRROR_PREFIX',
