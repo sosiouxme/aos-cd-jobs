@@ -150,15 +150,15 @@ node {
             stage("sign") {
                 if ( params.MIRROR ) {
                     release.signArtifacts(
-			name: dest_release_tag,
-			signature_name: "signature-1",
-			dry_run: params.DRY_RUN,
-			env: "prod",
-			key_name: "beta2",
-			arch: arch,
-			digest: payloadDigest,
-			client_type: 'ocp-dev-preview',
-		    )
+                        name: dest_release_tag,
+                        signature_name: "signature-1",
+                        dry_run: params.DRY_RUN,
+                        env: "prod",
+                        key_name: "beta2",
+                        arch: arch,
+                        digest: payloadDigest,
+                        client_type: 'ocp-dev-preview',
+                    )
                 }
             }
 
